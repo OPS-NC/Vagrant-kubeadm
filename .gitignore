@@ -1,0 +1,20 @@
+# Vagrant
+.vagrant/
+*.log
+
+# Topologie locale (copie de lab.env.example) — contient potentiellement des secrets
+lab.env
+
+# Sorties générées par kubeadm/cluster-up.sh et les scripts _k8s/*-up.sh
+_out/
+kubeconfig
+kubeconfig.*
+
+# Documentation générée (make docs)
+docs/index.html
+
+# Divers
+.DS_Store
+*.swp
+*.retry
+harbor.txt
