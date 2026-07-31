@@ -45,7 +45,8 @@ CERT_MANAGER_VERSION="${CERT_MANAGER_VERSION:-v1.20.2}"
 # où `sed` sort en 2. Le `tr` retire d'éventuels guillemets autour de la valeur.
 lire_lab_env() {
   sed -n "s/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}$1=//p" \
-    "${REPO_DIR}/lab.env" 2>/dev/null | head -n1 | tr -d " \"'" || true
+    "${REPO_DIR}/lab.env" 2>/dev/null | head -n1 \
+    | sed 's/[[:space:]][[:space:]]*#.*$//' | tr -d " \"'" || true
 }
 # `_out/cluster.env` est écrit par kubeadm/cluster-up.sh : il porte des valeurs DÉTECTÉES
 # sur le cluster réel (nom d'interface, CIDR effectif) là où lab.env n'exprime qu'une

@@ -7,8 +7,25 @@
 # L'artefact n'est PAS versionné : il est régénéré à chaque push sur main, ce qui évite
 # un diff de plusieurs centaines de kilo-octets à chaque changement de doc.
 #
-# Prérequis côté dépôt, à faire UNE FOIS : Settings → Pages → Source = « GitHub Actions ».
+# ---------------------------------------------------------------------------
+# PUBLICATION : DÉSACTIVÉE PAR DÉFAUT, ET C'EST VOULU.
+#
+# GitHub Pages sur un dépôt PRIVÉ exige un plan payant (Pro/Team/Enterprise) ; sur le
+# plan Free, l'API répond « Your current plan does not support GitHub Pages for this
+# repository ». Ce dépôt est privé : le job `deploy` échouerait donc à CHAQUE push,
+# transformant l'onglet Actions en mur de croix rouges qui finit par être ignoré —
+# et le jour où un vrai test casse, plus personne ne le voit.
+#
+# Le job `build` tourne quand même, et il a de la valeur à lui seul : il vérifie que
+# toute la doc se construit, qu'aucun lien ni aucune ancre n'est mort, et qu'aucun
+# motif de secret ne s'est glissé dans une page.
+#
+# POUR PUBLIER, le jour où le dépôt devient public (ou l'org payante) :
+#   1. gh repo edit OPS-NC/Vagrant-kubeadm --visibility public   # si applicable
+#   2. gh api repos/OPS-NC/Vagrant-kubeadm/pages -X POST -f build_type=workflow
+#   3. gh variable set PUBLISH_PAGES --body true
 # URL publiée : https://ops-nc.github.io/Vagrant-kubeadm/
+# ---------------------------------------------------------------------------
 name: docs
 
 on:
@@ -45,8 +62,12 @@ jobs:
           enable-cache: true
 
       # build.py interroge git (ls-files, check-ignore, log -1) : le checkout suffit.
-      - name: Générer la page
-        run: uv run docs/build.py --out _site/index.html
+      #
+      # `--strict` : un lien ou une ancre morte fait ÉCHOUER le job. Sans lui, seul
+      # `make validate-docs` (local) vérifiait les liens, et une PR qui ne lance pas
+      # `make validate` publiait une doc trouée sans que rien ne le signale.
+      - name: Générer la page (liens et ancres vérifiés)
+        run: uv run docs/build.py --strict --out _site/index.html
 
       # Garde-fou : aucun secret ne doit se retrouver dans la page publiée. Le dépôt
       # est public et la doc cite beaucoup de commandes — une valeur réelle collée par
@@ -64,6 +85,9 @@ jobs:
 
   deploy:
     needs: build
+    # Sans cette garde, le job échoue à chaque push tant que Pages n'est pas activable
+    # (dépôt privé sur un plan Free). Cf. l'en-tête du fichier pour l'activer.
+    if: vars.PUBLISH_PAGES == 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

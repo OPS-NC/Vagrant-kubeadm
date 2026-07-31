@@ -48,6 +48,9 @@ K8S_APT_MINOR     = ENV["K8S_APT_MINOR"]     || "v1.36"
 CONTAINERD_SOURCE = ENV["CONTAINERD_SOURCE"] || "docker"
 REGISTRY_MIRROR   = ENV["REGISTRY_MIRROR"]   || ""
 SYSTEM_UPGRADE    = ENV["SYSTEM_UPGRADE"]    || "true"
+# Transmis à provision.sh pour qu'un worker ne pré-tire pas une image kube-proxy
+# qui ne sera jamais utilisée (cf. l'étape 7 de provision.sh).
+KUBE_PROXY_REPLACEMENT = ENV["KUBE_PROXY_REPLACEMENT"] || "true"
 
 # --- Topologie --------------------------------------------------------------
 CONTROL_PLANES = (ENV["CONTROL_PLANES"] || 1).to_i   # 1 = simple ; 3 = HA (quorum etcd)
@@ -115,6 +118,30 @@ servers.each do |s|
   end
 end
 
+# Garde-fou : la plage réservée aux Services LoadBalancer (annonce L2 de Cilium). Un
+# node qui y atterrit entre en conflit ARP avec le Gateway Envoy — panne obscure entre
+# toutes, puisque le node ET l'UI marchent « une fois sur deux ».
+lb_start = (ENV["LB_POOL_START"] || "#{NETWORK}.200").split(".").last.to_i
+lb_end   = (ENV["LB_POOL_END"]   || "#{NETWORK}.230").split(".").last.to_i
+servers.each do |s|
+  octet = s[:ip].split(".").last.to_i
+  if octet >= lb_start && octet <= lb_end
+    raise "Vagrant-KubeADM : l'IP #{s[:ip]} (#{s[:name]}) tombe dans la plage réservée aux " \
+          "Services LoadBalancer (#{NETWORK}.#{lb_start}-#{NETWORK}.#{lb_end}). Réduis " \
+          "WORKERS, ou déplace LB_POOL_START/LB_POOL_END dans lab.env."
+  end
+end
+
+# Garde-fou : dernier octet valide. `WORKERS=160` produirait `192.168.56.260`, que
+# VirtualBox rejette avec un message qui ne parle ni de Vagrant ni du lab.
+servers.each do |s|
+  octet = s[:ip].split(".").last.to_i
+  if octet < 3 || octet > 254
+    raise "Vagrant-KubeADM : l'IP #{s[:ip]} (#{s[:name]}) est hors du réseau " \
+          "#{NETWORK}.0/24. Réduis CONTROL_PLANES/WORKERS ou revois CP_IP_*/WK_IP_*."
+  end
+end
+
 # Garde-fou : deux nodes sur la même IP (arrive vite en bricolant CP_IP_STEP/WK_IP_START).
 doublons = servers.map { |s| s[:ip] }.tally.select { |_, n| n > 1 }.keys
 unless doublons.empty?
@@ -179,12 +206,15 @@ Vagrant.configure("2") do |config|
           "NETWORK"           => NETWORK,
           "VIP"               => VIP,
           "CP_IPS"            => CP_IPS,
+          "CP_IP_START"       => CP_IP_START.to_s,
+          "CP_IP_STEP"        => CP_IP_STEP.to_s,
           "VRRP_ROUTER_ID"    => VRRP_ROUTER_ID.to_s,
           "K8S_VERSION"       => K8S_VERSION,
           "K8S_APT_MINOR"     => K8S_APT_MINOR,
           "CONTAINERD_SOURCE" => CONTAINERD_SOURCE,
           "REGISTRY_MIRROR"   => REGISTRY_MIRROR,
           "SYSTEM_UPGRADE"    => SYSTEM_UPGRADE,
+          "KUBE_PROXY_REPLACEMENT" => KUBE_PROXY_REPLACEMENT,
           "HOSTS_ENTRIES"     => HOSTS_ENTRIES,
         }
     end

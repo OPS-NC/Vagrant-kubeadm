@@ -457,9 +457,20 @@ def resoudre(rendu: dict, index: dict[str, dict[str, str]],
     table = index[rendu["langue"]]
 
     def remplacer(m: re.Match[str]) -> str:
-        cible = (base / m.group(1)).as_posix()
-        cible = Path(cible).resolve().relative_to(RACINE).as_posix() \
-            if (RACINE / cible).exists() else cible
+        # `Path(cible)` est RELATIF : `.resolve()` le résolvait contre le cwd du
+        # processus et non contre RACINE. Le garde testait donc un chemin pendant que
+        # `.resolve()` en calculait un autre, d'où un `ValueError: not in the subpath
+        # of` NON ATTRAPÉ qui faisait planter toute la génération — dès qu'on lançait
+        # build.py depuis un autre répertoire que la racine, ou dès qu'un lien sortait
+        # du dépôt (`../voisin/README.md`), auquel cas `--strict` plantait au lieu de
+        # signaler proprement le lien cassé.
+        # On résout explicitement depuis RACINE, et on ne convertit que si la cible
+        # reste dans le dépôt. `unquote` pour rester cohérent avec le traitement des
+        # fragments plus bas (un nom de fichier accentué arrive percent-encodé).
+        cible = (base / unquote(m.group(1))).as_posix()
+        absolu = (RACINE / cible).resolve()
+        if absolu.is_relative_to(RACINE):
+            cible = absolu.relative_to(RACINE).as_posix()
         id_cible = table.get(cible)
         if not id_cible:
             alertes.append(f"{rendu['chemin']} → {m.group(1)} (page absente de la doc)")

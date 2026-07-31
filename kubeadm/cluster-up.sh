@@ -123,8 +123,11 @@ echo "==> Kubernetes : v${K8S_VERSION} — CNI=${CNI}, kube-proxy $([ "$KUBE_PRO
 manquantes=()
 for n in "${cp_names[@]}" "${wk_names[@]:-}"; do
   [ -z "$n" ] && continue
+  # `|| true` : si `vagrant status` échoue (VM absente de l'index, VirtualBox manquant,
+  # NODE_PREFIX changé), `set -e` tuerait le script SANS message — alors que tout le
+  # bloc ci-dessous existe précisément pour dire « lance d'abord vagrant up ».
   etat="$(vagrant status "$n" --machine-readable 2>/dev/null \
-           | awk -F, '$3 == "state" {print $4; exit}')"
+           | awk -F, '$3 == "state" {print $4; exit}' || true)"
   [ "$etat" = "running" ] || manquantes+=("${n} (${etat:-inexistante})")
 done
 if [ "${#manquantes[@]}" -gt 0 ]; then
@@ -200,7 +203,14 @@ sur_node "$first_cp" "sudo SKIP_PHASES='${skip}' bash /vagrant/kubeadm/node-init
 # --- kubeconfig sur l'hôte ---------------------------------------------------
 # Rien à copier : node-init.sh a écrit admin.conf dans le dossier synchronisé.
 cp -f "${OUT}/admin.conf" "${REPO_DIR}/kubeconfig"
+# Le `chmod` posé par node-init.sh DANS la VM est un no-op : sur un montage vboxsf les
+# permissions viennent des options fmode/dmode du montage, pas du fichier. C'est donc
+# ICI, côté hôte, que le durcissement a un effet réel. `_out/` reste lisible par toutes
+# les VM du lab (il porte le token de jonction et la clé de certificats) — il est
+# gitignoré, mais ce n'est pas un coffre-fort.
 chmod 0600 "${REPO_DIR}/kubeconfig"
+chmod 0700 "${OUT}" 2>/dev/null || true
+chmod 0600 "${OUT}/join.env" "${OUT}/admin.conf" 2>/dev/null || true
 export KUBECONFIG="${REPO_DIR}/kubeconfig"
 
 # L'apiserver doit répondre PAR LA VIP avant de joindre quoi que ce soit : c'est
@@ -239,8 +249,14 @@ for ((i = 2; i <= CONTROL_PLANES; i++)); do
   rendre kubeadm/templates/kubeadm-join-cp.yaml.tpl "${OUT}/join-${name}.yaml" "$name" "$ip"
   echo "    - ${name} (${ip})"
   sur_node "$name" "sudo NODE_NAME='${name}' bash /vagrant/kubeadm/node-join.sh"
-  # On attend que le nouveau membre etcd soit vu par l'API avant d'enchaîner.
-  kubectl wait --for=condition=Ready=false --timeout=10s "node/${name}" >/dev/null 2>&1 || true
+  # Pas d'attente supplémentaire ici, et c'est délibéré : `kubeadm join --control-plane`
+  # est DÉJÀ bloquant sur ce point. Il ajoute le membre etcd en `learner`, le promeut,
+  # puis appelle `WaitForClusterAvailable` — il ne rend la main qu'une fois le cluster
+  # etcd de nouveau sain.
+  # (Il y avait ici un `kubectl wait --for=condition=Ready=false` censé « attendre que
+  #  le membre etcd soit vu par l'API ». Il ne faisait rien de tel : un node fraîchement
+  #  joint est déjà Ready=False faute de CNI, donc la condition était satisfaite
+  #  instantanément. Une garde qui ment est pire qu'une absence de garde.)
 done
 else
 log "[3/5] Control plane unique — aucune jonction de CP"
@@ -288,8 +304,13 @@ done
 # L'interface host-only est DÉTECTÉE dans la VM (cf. provision.sh) plutôt que devinée :
 # Debian 13 utilise les noms prédictibles (`enp0s8`) mais certaines box gardent `eth1`,
 # et Cilium a besoin du vrai nom pour son annonce L2.
+# `|| true` INDISPENSABLE : une affectation dont la substitution de commande échoue
+# déclenche `set -e`, et la ligne de repli ci-dessous ne serait jamais atteinte. Le
+# cluster serait alors debout mais `_out/cluster.env` jamais écrit — tous les scripts
+# _k8s/ retomberaient sur `eth1` au lieu de l'interface réelle, Cilium annoncerait en L2
+# sur la mauvaise carte, et aucune UI ne serait joignable. Panne muette par excellence.
 hostonly_if="$(sur_node "$first_cp" "sed -n 's/^HOSTONLY_IF=//p' /etc/kubeadm-lab/node.env" 2>/dev/null \
-                | tr -d '\r[:space:]')"
+                | tr -d '[:space:]' || true)"
 hostonly_if="${hostonly_if:-eth1}"
 cat >"${OUT}/cluster.env" <<EOF
 # Généré par kubeadm/cluster-up.sh — relu par les scripts _k8s/*-up.sh.

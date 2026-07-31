@@ -42,19 +42,40 @@ validate: validate-shell validate-yaml validate-vagrant validate-kubeadm validat
 # incohérent — des paquets 1.36 avec une config générée pour 1.35, ou pire, un Vagrantfile
 # qui crée 3 VM quand cluster-up.sh n'en joint qu'une. Ce test rend la divergence
 # impossible à committer sans s'en apercevoir.
+#
+# ⚠️ Les deux extractions ci-dessous ont été un NID À FAUX NÉGATIFS. Version initiale :
+#      sed -n "s/.*ENV\[\"$$k\"\][^|]*|| \([^)]*\)).*/\1/p"   <- exigeait une ')'
+#    Or le Vagrantfile écrit les valeurs sous DEUX formes :
+#      K8S_VERSION    = ENV["K8S_VERSION"] || "1.36.3"     (sans parenthèse)
+#      CONTROL_PLANES = (ENV["CONTROL_PLANES"] || 1).to_i  (avec)
+#    K8S_VERSION et NETWORK ressortaient donc VIDES, le garde `[ -n "$$vf" ]` sautait la
+#    comparaison, et la cible affichait « alignés » sur un dépôt divergent. Même piège
+#    côté cluster-up.sh : l'ancre `^` ratait les affectations en milieu de ligne
+#    (`CP_IP_START=… ; CP_IP_STEP=…`), donc les deux *_STEP n'étaient pas vérifiés.
+#    On accepte maintenant les deux formes, et une clé absente de lab.env.example est
+#    une ERREUR au lieu d'un silence — un garde muet est pire que pas de garde.
+#
+# `VIP` est volontairement EXCLU : c'est le seul défaut DÉRIVÉ et non littéral
+# (`"#{NETWORK}.5"` côté Ruby, `"${NETWORK}.5"` côté shell). La comparaison textuelle
+# le signalerait faussement à chaque exécution, et un garde qui crie au loup finit
+# ignoré — donc inutile. Sa cohérence est garantie autrement : les deux fichiers le
+# dérivent de `NETWORK`, qui est lui bien vérifié ici.
 validate-defaults: ## Vérifie que les défauts sont identiques dans lab.env.example, le Vagrantfile et cluster-up.sh
 	@fail=0; \
-	for k in K8S_VERSION CONTROL_PLANES WORKERS CP_MEM CP_CPU WK_MEM WK_CPU \
-	         NETWORK CP_IP_START CP_IP_STEP WK_IP_START WK_IP_STEP; do \
+	for k in K8S_VERSION K8S_APT_MINOR CONTAINERD_SOURCE SYSTEM_UPGRADE BOX NODE_PREFIX \
+	         CLUSTER_NAME CONTROL_PLANES WORKERS CP_MEM CP_CPU WK_MEM WK_CPU \
+	         NETWORK CP_IP_START CP_IP_STEP WK_IP_START WK_IP_STEP \
+	         POD_CIDR SERVICE_CIDR CNI KUBE_PROXY_REPLACEMENT UNTAINT_CP VRRP_ROUTER_ID; do \
 	  ref="$$(sed -n "s/^$$k=//p" lab.env.example | head -n1)"; \
-	  vf="$$(sed -n "s/.*ENV\[\"$$k\"\][^|]*|| \([^)]*\)).*/\1/p" Vagrantfile | head -n1 | tr -d '\" ')"; \
-	  cu="$$(sed -n "s/^$$k=\"\$${$$k:-\([^}]*\)}\".*/\1/p" kubeadm/cluster-up.sh | head -n1)"; \
+	  [ -n "$$ref" ] || { echo "❌ $$k : absent de lab.env.example"; fail=1; continue; }; \
+	  vf="$$(sed -n "s/.*ENV\[\"$$k\"\][^|]*|| *\([^);]*\).*/\1/p" Vagrantfile | head -n1 | tr -d '\" ')"; \
+	  cu="$$(sed -n "s/.*$$k=\"\$${$$k:-\([^}]*\)}\".*/\1/p" kubeadm/cluster-up.sh | head -n1 | tr -d '\" ')"; \
 	  if [ -n "$$vf" ] && [ "$$vf" != "$$ref" ]; then \
 	    echo "❌ $$k : lab.env.example=$$ref mais Vagrantfile=$$vf"; fail=1; fi; \
 	  if [ -n "$$cu" ] && [ "$$cu" != "$$ref" ]; then \
 	    echo "❌ $$k : lab.env.example=$$ref mais cluster-up.sh=$$cu"; fail=1; fi; \
 	done; \
-	[ $$fail -eq 0 ] && echo "✅ défauts : lab.env.example / Vagrantfile / cluster-up.sh alignés"
+	[ $$fail -eq 0 ] && echo "✅ défauts : 24 clés alignées (lab.env.example / Vagrantfile / cluster-up.sh)"
 
 validate-docs: ## Construit la doc dans un fichier jetable et exige des liens valides
 	@out="$$(mktemp -d)"; trap 'rm -rf "$$out"' EXIT; \

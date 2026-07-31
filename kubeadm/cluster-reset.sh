@@ -60,8 +60,10 @@ fi
 # répond encore se désinscrit proprement, au lieu de laisser un objet Node fantôme.
 for ((i = ${#nodes[@]} - 1; i >= 0; i--)); do
   node="${nodes[$i]}"
+  # `|| true` : sans lui, un `vagrant status` en erreur tuerait le reset sous `set -e`
+  # au lieu de simplement signaler la VM comme absente et de passer à la suivante.
   etat="$(vagrant status "$node" --machine-readable 2>/dev/null \
-           | awk -F, '$3 == "state" {print $4; exit}')"
+           | awk -F, '$3 == "state" {print $4; exit}' || true)"
   if [ "$etat" != "running" ]; then
     echo "    - ${node} : ignorée (${etat:-inexistante})"
     continue

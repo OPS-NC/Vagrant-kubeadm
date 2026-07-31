@@ -28,7 +28,7 @@ vagrant up                      # crée et PRÉPARE les VM (aucun cluster monté
 
 | | |
 |---|---|
-| 📖 **Documentation navigable** | [ops-nc.github.io/Vagrant-kubeadm](https://ops-nc.github.io/Vagrant-kubeadm/) — bascule EN/FR, copie hors ligne avec `make docs` |
+| 📖 **Documentation navigable** | `make docs` — une page HTML autonome, bascule EN/FR, thème clair/sombre, aucun CDN. Publication sur GitHub Pages : cf. §11. |
 | 📦 **Couche applicative** | [`_k8s/LISEZ-MOI.md`](_k8s/LISEZ-MOI.md) |
 | ⬆️ **Montée de version Kubernetes** | [`kubeadm/MISE-A-JOUR.md`](kubeadm/MISE-A-JOUR.md) |
 | 🚑 **Quelque chose casse ?** | [`DEPANNAGE.md`](DEPANNAGE.md) |

@@ -36,7 +36,8 @@ RENEW_DAYS="${RENEW_DAYS:-30}"
 # (où `sed` sort en 2).
 lire_lab_env() {
   sed -n "s/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}$1=//p" \
-    "${REPO_DIR}/lab.env" 2>/dev/null | head -n1 | tr -d " \"'" || true
+    "${REPO_DIR}/lab.env" 2>/dev/null | head -n1 \
+    | sed 's/[[:space:]][[:space:]]*#.*$//' | tr -d " \"'" || true
 }
 LAB_DOMAIN="${LAB_DOMAIN:-$(lire_lab_env LAB_DOMAIN)}"
 LAB_DOMAIN="${LAB_DOMAIN:-kubeadm.lab.example.io}"
@@ -88,7 +89,12 @@ if [ ! -s "$TLS_CRT" ] || [ ! -s "$TLS_KEY" ]; then
 elif ! openssl x509 -in "$TLS_CRT" -noout -checkend "$((RENEW_DAYS * 86400))" >/dev/null 2>&1; then
   echo "    certificat expirant sous ${RENEW_DAYS} jours -> régénération"
   besoin_cert=1
-elif ! openssl x509 -in "$TLS_CRT" -noout -ext subjectAltName 2>/dev/null \
+# `-text` et NON `-ext subjectAltName` : `-ext` n'existe pas dans LibreSSL, qui est
+# l'openssl SYSTÈME de macOS (/usr/bin/openssl). Il y sortait en erreur sans rien
+# écrire, la condition était donc TOUJOURS vraie, et le certificat était régénéré à
+# chaque exécution — contredisant l'idempotence annoncée et rechargeant le TLS d'Envoy
+# à chaque `platform-up.sh`. `-text` fonctionne des deux côtés.
+elif ! openssl x509 -in "$TLS_CRT" -noout -text 2>/dev/null \
        | grep -Fq "DNS:*.${LAB_DOMAIN}"; then
   echo "    LAB_DOMAIN a changé (SAN ne couvre pas *.${LAB_DOMAIN}) -> régénération"
   besoin_cert=1

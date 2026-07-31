@@ -39,7 +39,8 @@ LONGHORN_VERSION="${LONGHORN_VERSION:-1.12.0}"
 # `set -e` + `pipefail`, tuerait le script. `|| true` couvre l'absence de lab.env.
 lire_lab_env() {
   sed -n "s/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}$1=//p" \
-    "${REPO_DIR}/lab.env" 2>/dev/null | head -n1 | tr -d " \"'" || true
+    "${REPO_DIR}/lab.env" 2>/dev/null | head -n1 \
+    | sed 's/[[:space:]][[:space:]]*#.*$//' | tr -d " \"'" || true
 }
 
 # --- Domaine du lab : défaut versionné NEUTRE (le dépôt est public) ----------

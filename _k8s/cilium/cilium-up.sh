@@ -37,7 +37,8 @@ lire_cluster_env() {
 }
 lire_lab_env() {
   sed -n "s/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}$1=//p" \
-    "${REPO_DIR}/lab.env" 2>/dev/null | head -n1 | tr -d " \"'" || true
+    "${REPO_DIR}/lab.env" 2>/dev/null | head -n1 \
+    | sed 's/[[:space:]][[:space:]]*#.*$//' | tr -d " \"'" || true
 }
 # Une vraie variable d'environnement reste prioritaire sur les deux fichiers.
 lire_param() {  # lire_param NOM DEFAUT

@@ -23,8 +23,8 @@
 #    mineure devant l'apiserver. Cf. kubeadm/UPGRADE.md.
 #
 # Variables reçues du Vagrantfile : NODE_NAME NODE_ROLE NODE_INDEX NODE_IP NETWORK
-# VIP CP_IPS VRRP_ROUTER_ID K8S_VERSION K8S_APT_MINOR CONTAINERD_SOURCE
-# REGISTRY_MIRROR HOSTS_ENTRIES SYSTEM_UPGRADE
+# VIP CP_IPS CP_IP_START CP_IP_STEP VRRP_ROUTER_ID K8S_VERSION K8S_APT_MINOR CONTAINERD_SOURCE
+# REGISTRY_MIRROR HOSTS_ENTRIES SYSTEM_UPGRADE KUBE_PROXY_REPLACEMENT
 set -euo pipefail
 
 # --- Non-interactivité : ceinture ET bretelles ------------------------------
@@ -48,6 +48,8 @@ NODE_IP="${NODE_IP:?NODE_IP manquant (fourni par le Vagrantfile)}"
 NETWORK="${NETWORK:-192.168.56}"
 VIP="${VIP:-${NETWORK}.5}"
 CP_IPS="${CP_IPS:-}"
+CP_IP_START="${CP_IP_START:-10}"
+CP_IP_STEP="${CP_IP_STEP:-10}"
 VRRP_ROUTER_ID="${VRRP_ROUTER_ID:-51}"
 K8S_VERSION="${K8S_VERSION:-1.36.3}"
 K8S_APT_MINOR="${K8S_APT_MINOR:-v1.36}"
@@ -55,6 +57,19 @@ CONTAINERD_SOURCE="${CONTAINERD_SOURCE:-docker}"
 REGISTRY_MIRROR="${REGISTRY_MIRROR:-}"
 HOSTS_ENTRIES="${HOSTS_ENTRIES:-}"
 SYSTEM_UPGRADE="${SYSTEM_UPGRADE:-true}"
+KUBE_PROXY_REPLACEMENT="${KUBE_PROXY_REPLACEMENT:-true}"
+
+# Normalisation + REJET de l'inconnu, comme SELF_SIGNED et UNTAINT_CP ailleurs dans le
+# dépôt. Sans ce `case`, `SYSTEM_UPGRADE=True` ou `yes` sauterait SILENCIEUSEMENT la
+# mise à jour — et une faute de frappe (`flase`) ferait la même chose, sans un mot.
+for v in SYSTEM_UPGRADE KUBE_PROXY_REPLACEMENT; do
+  eval "val=\${$v}"
+  val="$(printf '%s' "$val" | tr '[:upper:]' '[:lower:]')"
+  case "$val" in
+    true|false) eval "$v=\$val" ;;
+    *) echo "ERREUR : ${v}='${val}' inconnu (true|false)." >&2 ; exit 1 ;;
+  esac
+done
 
 log() { printf '\n\033[1;36m[%s] ==> %s\033[0m\n' "$NODE_NAME" "$*"; }
 
@@ -340,9 +355,13 @@ if [ "$NODE_ROLE" = "controlplane" ]; then
   kubeadm config images pull --kubernetes-version "v${K8S_VERSION}" >/dev/null 2>&1 \
     || echo "    (pré-tirage partiel — kubeadm init retéléchargera au besoin)"
 else
-  # Un worker n'héberge ni apiserver, ni etcd, ni scheduler : seules `pause` et
-  # `kube-proxy` lui servent. Tirer les 7 images gâcherait ~500 Mio par worker.
-  for img in "$PAUSE_IMAGE" "registry.k8s.io/kube-proxy:v${K8S_VERSION}"; do
+  # Un worker n'héberge ni apiserver, ni etcd, ni scheduler : tirer les 7 images
+  # gâcherait ~500 Mio par worker. `pause` lui sert toujours ; `kube-proxy` seulement
+  # s'il est réellement installé — avec KUBE_PROXY_REPLACEMENT=true (le défaut du
+  # dépôt) cluster-up.sh saute `addon/kube-proxy` et l'image ne servirait JAMAIS.
+  images="$PAUSE_IMAGE"
+  [ "$KUBE_PROXY_REPLACEMENT" != "true" ] && images="$images registry.k8s.io/kube-proxy:v${K8S_VERSION}"
+  for img in $images; do
     crictl pull "$img" >/dev/null 2>&1 || true
   done
 fi
@@ -387,32 +406,71 @@ log "[8/8] keepalived — VIP ${VIP} sur ${HOSTONLY_IF} (VRRP)"
 #   kube-vip reste une alternative valable une fois le cluster en route (cf. README).
 
 # VRRP en UNICAST et non en multicast : sur le switch virtuel host-only de VirtualBox,
-# le multicast est le premier truc à se comporter bizarrement. On connaît toutes les
-# IP de control plane, autant les désigner explicitement.
+# le multicast est le premier truc à se comporter bizarrement.
+#
+# ⚠️ LES PAIRS SONT LES CONTROL PLANES *POSSIBLES*, PAS CEUX QUI EXISTENT AUJOURD'HUI.
+#    C'est ce qui rend la croissance 1 CP -> 3 CP sûre, et ce n'est pas un détail.
+#
+#    Le piège, si on n'y prend pas garde : avec CONTROL_PLANES=1, la liste des pairs
+#    serait VIDE et le bloc `unicast_peer` absent. Or keepalived, face à un
+#    `unicast_src_ip` sans aucun pair, ne refuse PAS la configuration : il émet un
+#    CONFIG_DEPRECATED et RETOMBE SILENCIEUSEMENT EN MULTICAST.
+#    Passer ensuite à CONTROL_PLANES=3 ne re-provisionne PAS cp1 (Vagrant ne rejoue les
+#    provisionneurs que sur les VM neuves, sauf `--provision`) : cp1 reste donc en
+#    multicast pendant que cp2/cp3 démarrent en unicast réel. Et les deux modes sont
+#    MUTUELLEMENT SOURDS — un socket bindé sur l'adresse multicast ne reçoit pas
+#    l'unicast, et réciproquement. cp1 se croit seul et prend la VIP ; cp2 se croit
+#    seul aussi et la prend également. DEUX nodes portent alors 192.168.56.5 :
+#    course ARP, API intermittente, et comme admin.conf, kubelet.conf ET le
+#    k8sServiceHost de Cilium pointent tous sur la VIP, c'est tout le cluster qui vacille.
+#
+#    En listant d'emblée les 5 IP de CP prévues par le plan d'adressage (les mêmes que
+#    les certSANs de cluster-up.sh), la configuration de cp1 est déjà la bonne le jour
+#    où cp2 et cp3 apparaissent. Un pair qui n'existe pas encore ne coûte qu'un paquet
+#    VRRP sans réponse toutes les secondes.
 peers=""
-if [ -n "$CP_IPS" ]; then
-  for ip in ${CP_IPS//,/ }; do
-    [ "$ip" = "$NODE_IP" ] && continue
-    peers="${peers}        ${ip}"$'\n'
-  done
-fi
+for i in 1 2 3 4 5; do
+  ip="${NETWORK}.$((CP_IP_START + (i - 1) * CP_IP_STEP))"
+  [ "$ip" = "$NODE_IP" ] && continue
+  peers="${peers}        ${ip}"$'\n'
+done
 
 # cp1 = 100, cp2 = 90, cp3 = 80. Le script de santé retire 30 : un cp1 dont l'apiserver
 # est mort tombe à 70 et passe DERRIÈRE un cp2 sain (90), qui reprend la VIP.
 priority=$((100 - (NODE_INDEX - 1) * 10))
 [ "$priority" -lt 10 ] && priority=10
 
-# Le VIP ne doit vivre que là où l'apiserver LOCAL répond. `/livez` est accessible en
-# anonyme : le ClusterRoleBinding `system:public-info-viewer`, posé par kubeadm,
-# l'ouvre à `system:unauthenticated`. Aucun credential à distribuer, donc.
+# La VIP ne doit vivre que là où l'apiserver LOCAL répond. L'endpoint est accessible
+# en anonyme : le ClusterRoleBinding `system:public-info-viewer`, posé par kubeadm,
+# ouvre /healthz, /livez et /readyz à `system:unauthenticated`. Aucun credential à
+# distribuer au script de santé, donc.
+#
+# ⚠️ `/livez/ping` et NON `/livez`. Contrairement à ce qu'on croit souvent, `/livez`
+#    AGRÈGE tous les checks enregistrés — dont `etcd`. Or `kubeadm join --control-plane`
+#    rend etcd temporairement indisponible en passant de 1 à 2 membres (kubeadm le
+#    documente lui-même). Un `/livez` global échouant plus de `fall x interval` = 9 s
+#    ferait tomber cp1 à 70 pendant que cp2 vient de passer à 90 : LA VIP SAUTERAIT SUR
+#    CP2 AU MILIEU DU BOOTSTRAP. `/livez/ping` est le sous-check trivial « le processus
+#    répond », sans aucune dépendance à un backend : c'est exactement ce qu'on veut
+#    savoir pour décider qui porte la VIP.
+#
 # Tant que le cluster n'existe pas, le test échoue sur TOUS les control planes : ils
 # perdent 30 points chacun, l'ordre relatif est préservé, et la VIP est quand même
 # portée. C'est exactement ce qu'il faut pour que `kubeadm init` la trouve en place.
-tee /usr/local/bin/check-apiserver.sh >/dev/null <<'EOF'
+#
+# Le script vit dans /etc/keepalived et NON dans /usr/local/bin : avec
+# `enable_script_security`, keepalived inspecte CHAQUE composant du chemin et désactive
+# purement et simplement le track_script si un répertoire est group-writable avec un
+# groupe non-root. Or /usr/local/bin devient `root:staff 2775` dès que
+# /etc/staff-group-for-usr-local existe (cas d'un système migré depuis stretch). La
+# bascule de VIP serait alors MORTE, sans autre trace qu'une ligne dans journalctl.
+# /etc/keepalived est root:root par construction : le risque disparaît.
+tee /etc/keepalived/check-apiserver.sh >/dev/null <<'EOF'
 #!/bin/sh
-curl -sfk --max-time 2 https://127.0.0.1:6443/livez >/dev/null
+curl -sfk --max-time 2 https://127.0.0.1:6443/livez/ping >/dev/null
 EOF
-chmod 0755 /usr/local/bin/check-apiserver.sh
+chown root:root /etc/keepalived/check-apiserver.sh
+chmod 0755 /etc/keepalived/check-apiserver.sh
 
 # Pas de bloc `authentication` : l'authentification VRRPv2 transmet un mot de passe en
 # clair et n'apporte aucune sécurité réelle. Ici la frontière de confiance est le réseau
@@ -425,7 +483,7 @@ global_defs {
 }
 
 vrrp_script chk_apiserver {
-    script "/usr/local/bin/check-apiserver.sh"
+    script "/etc/keepalived/check-apiserver.sh"
     interval 3
     timeout 2
     fall 3

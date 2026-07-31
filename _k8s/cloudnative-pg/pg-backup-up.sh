@@ -27,9 +27,17 @@ log() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 
 # --- mc (client MinIO) : binaire statique local si absent -------------------
 MC="$(command -v mc || true)"
+# `mc` est téléchargé pour la plateforme de l'HÔTE, pas pour Linux en dur : ce script
+# tourne sur le poste (il fait un `kubectl port-forward` sur 127.0.0.1), et un binaire
+# linux-amd64 sur un Mac Apple Silicon échoue en « exec format error ».
+mc_url() {
+  os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+  case "$(uname -m)" in arm64|aarch64) arch=arm64 ;; *) arch=amd64 ;; esac
+  printf 'https://dl.min.io/client/mc/release/%s-%s/mc' "$os" "$arch"
+}
 if [ -z "$MC" ]; then
   MC="$(mktemp -d)/mc"
-  curl -fsSL -o "$MC" https://dl.min.io/client/mc/release/linux-amd64/mc && chmod +x "$MC"
+  curl -fsSL -o "$MC" "$(mc_url)" && chmod +x "$MC"
 fi
 
 log "MinIO : bucket pg-backups + utilisateur dédié pg-backup"

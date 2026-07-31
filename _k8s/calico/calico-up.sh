@@ -51,8 +51,14 @@ fail() { printf '\033[1;31mERREUR : %s\033[0m\n' "$*" >&2; exit 1; }
 # `sed -n s///p` (et non `grep`) : sans correspondance il sort en 0, alors qu'un `grep`
 # sans match renvoie 1 et, sous `set -e` + `pipefail`, tuerait le script ici — bug réel
 # déjà corrigé dans _k8s/platform-up.sh. Le `tr` retire d'éventuels guillemets.
+# `_out/cluster.env` est généré : ni `export`, ni commentaire de fin de ligne à gérer.
 lire_cluster_env() { sed -n "s/^[[:space:]]*$1=//p" "${REPO_DIR}/_out/cluster.env" 2>/dev/null | head -n1 | tr -d " \"'" || true; }
-lire_lab_env()     { sed -n "s/^[[:space:]]*$1=//p" "${REPO_DIR}/lab.env"          2>/dev/null | head -n1 | tr -d " \"'" || true; }
+# `lab.env` est écrit à la main : il peut porter `export CLÉ=valeur` ET un commentaire
+# de fin de ligne. Les deux DOIVENT être gérés à l'identique du Vagrantfile et de
+# cluster-up.sh — sinon `LAB_DOMAIN=lab.example.com  # perso` donne
+# `lab.example.com#perso`, et le nom du Secret TLS dérivé devient un identifiant
+# Kubernetes invalide. Convention commune : un commentaire est un `#` PRÉCÉDÉ d'une espace.
+lire_lab_env()     { sed -n "s/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}$1=//p" "${REPO_DIR}/lab.env" 2>/dev/null | head -n1 | sed 's/[[:space:]][[:space:]]*#.*$//' | tr -d " \"'" || true; }
 lire_param() {  # lire_param NOM DEFAUT — l'environnement gagne, puis cluster.env, puis lab.env
   local v="${!1:-}"
   [ -z "$v" ] && v="$(lire_cluster_env "$1")"

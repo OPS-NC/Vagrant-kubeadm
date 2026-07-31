@@ -166,9 +166,14 @@ vagrant ssh k8s-cp2 -c "sudo journalctl -u keepalived -n 80 --no-pager"
 
 Three real causes, in order of likelihood:
 
-1. **An empty peer list** — the control plane was provisioned when `CONTROL_PLANES` was still
-   `1`, so `CP_IPS` held a single address. Fix: `vagrant provision` on every control plane after
-   changing the topology.
+1. **A missing `unicast_peer` block** — the node fell back to multicast. This used to happen
+   when a control plane was provisioned while `CONTROL_PLANES` was still `1`: with no peer to
+   list, keepalived does **not** reject the config, it silently reverts to multicast. Growing
+   the lab afterwards then left `cp1` in multicast while `cp2`/`cp3` spoke unicast — and the two
+   modes are *mutually deaf*, so both sides believed they were alone and both took the VIP.
+   `provision.sh` now always lists the **five** control-plane IPs the addressing plan allows,
+   so a config written for one CP is already correct for three. A node still missing the block
+   was provisioned by an older revision of the repo: `vagrant provision <node>` rewrites it.
 2. **Divergent `VRRP_ROUTER_ID`** — the nodes were provisioned with different `lab.env` values.
    All control planes of one cluster must share the same ID.
 3. **Another keepalived lab on the same host-only network using the same ID** (default `51`).

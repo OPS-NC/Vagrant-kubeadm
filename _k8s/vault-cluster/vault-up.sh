@@ -36,7 +36,8 @@ INIT_FILE="${INIT_FILE:-${REPO_DIR}/_out/vault-init.json}"
 # `set -e` + `pipefail`, tuerait le script. `|| true` couvre l'absence de lab.env.
 lire_lab_env() {
   sed -n "s/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}$1=//p" \
-    "${REPO_DIR}/lab.env" 2>/dev/null | head -n1 | tr -d " \"'" || true
+    "${REPO_DIR}/lab.env" 2>/dev/null | head -n1 \
+    | sed 's/[[:space:]][[:space:]]*#.*$//' | tr -d " \"'" || true
 }
 LAB_DOMAIN="${LAB_DOMAIN:-$(lire_lab_env LAB_DOMAIN)}"
 LAB_DOMAIN="${LAB_DOMAIN:-kubeadm.lab.example.io}"

@@ -60,7 +60,13 @@ ca_hash="$(printf '%s\n' "$join_cmd" | sed -n 's/.*--discovery-token-ca-cert-has
 
 # `upload-certs` rechiffre le Secret kubeadm-certs et imprime la nouvelle clé en
 # dernière ligne. Rejouable sans risque sur un cluster en route.
-cert_key="$(kubeadm init phase upload-certs --upload-certs | tail -n1 | tr -d '[:space:]')"
+# On extrait la clé par sa FORME (64 caractères hexadécimaux) plutôt que par sa
+# position : `tail -n1` casserait au premier message ajouté en fin de phase par une
+# future version de kubeadm, et l'erreur serait très difficile à relier à sa cause.
+# `|| true` : sans correspondance, `grep` renvoie 1 et, sous `pipefail`, tuerait le
+# script AVANT le contrôle explicite qui suit — lequel produit un bien meilleur message.
+cert_key="$(kubeadm init phase upload-certs --upload-certs \
+             | grep -Eo '^[a-f0-9]{64}$' | tail -n1 || true)"
 
 if [ -z "$token" ] || [ -z "$ca_hash" ] || [ -z "$cert_key" ]; then
   echo "ERREUR : impossible d'extraire les éléments de jonction." >&2
