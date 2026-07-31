@@ -26,7 +26,7 @@ vagrant up                      # creates and PREPARES the VMs (no cluster yet)
 
 | | |
 |---|---|
-| 📖 **Browsable docs** | `make docs` — one self-contained HTML page, EN/FR switch, light/dark theme, no CDN. See §11 for publishing it on GitHub Pages. |
+| 📖 **Browsable docs** | [ops-nc.github.io/Vagrant-kubeadm](https://ops-nc.github.io/Vagrant-kubeadm/) — EN/FR switch, light/dark theme, offline copy with `make docs` |
 | 📦 **Application layer** | [`_k8s/README.md`](_k8s/README.md) |
 | ⬆️ **Kubernetes upgrades** | [`kubeadm/UPGRADE.md`](kubeadm/UPGRADE.md) |
 | 🚑 **Something broken?** | [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) |

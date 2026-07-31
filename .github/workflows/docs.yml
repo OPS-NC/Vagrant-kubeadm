@@ -8,23 +8,18 @@
 # un diff de plusieurs centaines de kilo-octets à chaque changement de doc.
 #
 # ---------------------------------------------------------------------------
-# PUBLICATION : DÉSACTIVÉE PAR DÉFAUT, ET C'EST VOULU.
+# PUBLICATION : ACTIVE.
+#   Dépôt public, Pages en source « GitHub Actions », variable de dépôt
+#   PUBLISH_PAGES=true. URL : https://ops-nc.github.io/Vagrant-kubeadm/
 #
-# GitHub Pages sur un dépôt PRIVÉ exige un plan payant (Pro/Team/Enterprise) ; sur le
-# plan Free, l'API répond « Your current plan does not support GitHub Pages for this
-# repository ». Ce dépôt est privé : le job `deploy` échouerait donc à CHAQUE push,
-# transformant l'onglet Actions en mur de croix rouges qui finit par être ignoré —
-# et le jour où un vrai test casse, plus personne ne le voit.
+# Le job `deploy` reste conditionné à PUBLISH_PAGES. C'est délibéré : Pages est refusé
+# sur un dépôt privé hors plan payant, et sans cette garde le job échouerait à chaque
+# push si le dépôt repassait en privé — transformant l'onglet Actions en mur de croix
+# rouges, jusqu'à ce que plus personne ne regarde la CI. Pour suspendre la publication
+# sans toucher au workflow :  gh variable set PUBLISH_PAGES --body false
 #
-# Le job `build` tourne quand même, et il a de la valeur à lui seul : il vérifie que
-# toute la doc se construit, qu'aucun lien ni aucune ancre n'est mort, et qu'aucun
-# motif de secret ne s'est glissé dans une page.
-#
-# POUR PUBLIER, le jour où le dépôt devient public (ou l'org payante) :
-#   1. gh repo edit OPS-NC/Vagrant-kubeadm --visibility public   # si applicable
-#   2. gh api repos/OPS-NC/Vagrant-kubeadm/pages -X POST -f build_type=workflow
-#   3. gh variable set PUBLISH_PAGES --body true
-# URL publiée : https://ops-nc.github.io/Vagrant-kubeadm/
+# Le job `build`, lui, tourne TOUJOURS : il construit la doc, exige que chaque lien et
+# chaque ancre résolve (--strict), et refuse de publier s'il détecte un motif de secret.
 # ---------------------------------------------------------------------------
 name: docs
 
