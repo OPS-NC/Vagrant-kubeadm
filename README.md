@@ -560,10 +560,10 @@ written by [`provision.sh`](https://github.com/OPS-NC/Vagrant-kubeadm/blob/main/
   host-only switch multicast is the first thing to behave strangely, and we know every
   control-plane IP anyway.
 - **Priorities** cp1 = 100, cp2 = 90, cp3 = 80.
-- **`vrrp_script chk_apiserver`** polls `https://127.0.0.1:6443/livez` every 3 s with
+- **`vrrp_script chk_apiserver`** polls `https://127.0.0.1:6443/livez/ping` every 3 s with
   `weight -30`: a control plane whose apiserver is dead drops to 70 and falls behind a healthy
   cp2 at 90, which takes the VIP over.
-- `/livez` is readable **anonymously** thanks to the `system:public-info-viewer`
+- `/livez/ping` is readable **anonymously** thanks to the `system:public-info-viewer`
   ClusterRoleBinding kubeadm creates — no credential to distribute to a health script.
 - **While no cluster exists, the check fails on every CP**: they each lose 30 points, the
   relative order is preserved, and the VIP is carried anyway. Which is exactly what

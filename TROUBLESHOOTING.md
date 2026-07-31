@@ -131,7 +131,7 @@ vagrant ssh k8s-cp1 -c "sudo crictl logs \$(sudo crictl ps -a -q --name kube-api
 
 A `CrashLoopBackOff` apiserver is almost always etcd underneath it: check `crictl ps -a | grep
 etcd` and section 5 below. Note that keepalived's health check
-(`/usr/local/bin/check-apiserver.sh`, hitting `https://127.0.0.1:6443/livez` every 3 s) only
+(`/etc/keepalived/check-apiserver.sh`, hitting `https://127.0.0.1:6443/livez/ping` every 3 s) only
 subtracts 30 points from the priority — it never removes the VIP entirely, so the VIP being up
 proves nothing about the apiserver.
 
@@ -313,11 +313,41 @@ path.
 **Fix — by hand,** if you are driving kubeadm yourself:
 
 ```bash
-vagrant ssh k8s-cp1 -c "sudo kubeadm init phase upload-certs --upload-certs"   # new certificate key
+vagrant ssh k8s-cp1 -c "sudo kubeadm init phase upload-certs --upload-certs \\
+     --config /vagrant/_out/kubeadm-init.yaml"                                  # new certificate key
 vagrant ssh k8s-cp1 -c "sudo kubeadm token create --print-join-command"        # new token + CA hash
 ```
 
 Both commands are safe to replay on a running cluster.
+
+### `upload-certs` fails with `x509: … not 10.0.2.15`
+
+```
+error execution phase upload-certs: could not bootstrap the admin user in file admin.conf:
+unable to create ClusterRoleBinding: Post "https://10.0.2.15:6443/apis/rbac.authorization.k8s.io/v1/…":
+tls: failed to verify certificate: x509: certificate is valid for 10.96.0.1, 192.168.56.10,
+192.168.56.5, …, 127.0.0.1, not 10.0.2.15
+```
+
+**Symptom.** `kubeadm init` succeeds, the join command is printed, then `cluster-up.sh` dies on
+*« impossible d'extraire les éléments de jonction »*.
+
+**Cause.** `kubeadm init phase upload-certs` builds its API client from
+`InitConfiguration.LocalAPIEndpoint.AdvertiseAddress` — **not** from `controlPlaneEndpoint`, and
+not from `admin.conf`. Run without `--config`, kubeadm defaults that address by *detecting the
+default route*, which in any Vagrant VM leaves through the NAT NIC: `10.0.2.15`, identical on
+every machine. The client then dials an address that is legitimately absent from the certificate
+SANs, and TLS verification fails.
+
+This is the `node-ip` trap of §9 in another disguise.
+
+**Fix.** Already applied: `node-init.sh` passes `--config` so the endpoint is the node's real
+host-only IP. If you hit this, your checkout predates the fix — `git pull`, then re-run
+`./kubeadm/cluster-up.sh` (it skips the completed `init` and only redoes what is missing).
+
+> ⚠️ **Do not "fix" this by adding `10.0.2.15` to `certSANs`.** That address is shared by every
+> VM in the lab, so it identifies no node at all; you would be papering over a client aimed at
+> the wrong interface. The endpoint is what must be corrected, never the certificate.
 
 ### kubeadm preflight complains about swap, CPU count or memory
 

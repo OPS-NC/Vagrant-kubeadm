@@ -581,10 +581,10 @@ lève la VIP dès le boot de la VM, et la dépendance circulaire disparaît. Sa 
   virtuel host-only VirtualBox, le multicast est la première chose à se comporter bizarrement,
   et on connaît de toute façon toutes les IP de control plane.
 - **Priorités** cp1 = 100, cp2 = 90, cp3 = 80.
-- **`vrrp_script chk_apiserver`** interroge `https://127.0.0.1:6443/livez` toutes les 3 s avec
+- **`vrrp_script chk_apiserver`** interroge `https://127.0.0.1:6443/livez/ping` toutes les 3 s avec
   `weight -30` : un control plane dont l'apiserver est mort tombe à 70 et passe derrière un
   cp2 sain à 90, qui reprend la VIP.
-- `/livez` est lisible **en anonyme** grâce au ClusterRoleBinding `system:public-info-viewer`
+- `/livez/ping` est lisible **en anonyme** grâce au ClusterRoleBinding `system:public-info-viewer`
   posé par kubeadm — aucun credential à distribuer à un script de santé.
 - **Tant qu'aucun cluster n'existe, le test échoue sur tous les CP** : chacun perd 30 points,
   l'ordre relatif est préservé, et la VIP est quand même portée. Exactement ce dont

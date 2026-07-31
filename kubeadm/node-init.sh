@@ -60,17 +60,51 @@ ca_hash="$(printf '%s\n' "$join_cmd" | sed -n 's/.*--discovery-token-ca-cert-has
 
 # `upload-certs` rechiffre le Secret kubeadm-certs et imprime la nouvelle clé en
 # dernière ligne. Rejouable sans risque sur un cluster en route.
+# ⚠️ `--config` EST OBLIGATOIRE ICI, et son absence est un piège redoutable.
+#
+#    Cette phase construit son client Kubernetes à partir de
+#    `InitConfiguration.LocalAPIEndpoint.AdvertiseAddress` (et NON du
+#    `controlPlaneEndpoint` ni de admin.conf) :
+#        d.client = EnsureAdminClusterRoleBinding(..., &d.Cfg().LocalAPIEndpoint, nil)
+#    Sans `--config`, kubeadm applique ses défauts et DÉTECTE cette adresse depuis la
+#    route par défaut — qui, dans un lab Vagrant, sort par la carte NAT : 10.0.2.15,
+#    la MÊME sur toutes les VM. Le client tape alors https://10.0.2.15:6443 et la
+#    poignée de main TLS échoue, puisque ce n'est évidemment pas dans les certSANs :
+#        x509: certificate is valid for 192.168.56.10, 192.168.56.5, …, not 10.0.2.15
+#
+#    C'est exactement le piège `node-ip` documenté dans le README, sous une autre
+#    forme. Ajouter 10.0.2.15 aux certSANs serait le MAUVAIS correctif : cette adresse
+#    est partagée par toutes les VM, elle n'identifie aucun node. Il faut au contraire
+#    dire à kubeadm quel est son vrai endpoint local — c'est ce que fait `--config`.
+#
+#    `--upload-certs` fait bien partie des rares drapeaux combinables avec `--config`
+#    (cf. isAllowedFlag) ; `--certificate-key`, lui, ne l'est pas — on ne l'utilise pas.
+#
 # On extrait la clé par sa FORME (64 caractères hexadécimaux) plutôt que par sa
 # position : `tail -n1` casserait au premier message ajouté en fin de phase par une
 # future version de kubeadm, et l'erreur serait très difficile à relier à sa cause.
 # `|| true` : sans correspondance, `grep` renvoie 1 et, sous `pipefail`, tuerait le
 # script AVANT le contrôle explicite qui suit — lequel produit un bien meilleur message.
-cert_key="$(kubeadm init phase upload-certs --upload-certs \
+cert_key="$(kubeadm init phase upload-certs --upload-certs --config "$CONFIG" \
              | grep -Eo '^[a-f0-9]{64}$' | tail -n1 || true)"
 
 if [ -z "$token" ] || [ -z "$ca_hash" ] || [ -z "$cert_key" ]; then
-  echo "ERREUR : impossible d'extraire les éléments de jonction." >&2
-  echo "         join_cmd = ${join_cmd}" >&2
+  # On nomme l'élément manquant : les trois viennent de commandes DIFFÉRENTES, et
+  # savoir laquelle a échoué oriente immédiatement le diagnostic. Le message précédent
+  # n'affichait que `join_cmd`, ce qui laissait croire à un problème de token alors que
+  # c'est `upload-certs` qui échouait.
+  {
+    echo "ERREUR : impossible d'extraire les éléments de jonction."
+    [ -z "$token" ]    && echo "  - token           MANQUANT   (kubeadm token create --print-join-command)"
+    [ -z "$ca_hash" ]  && echo "  - empreinte CA    MANQUANTE  (idem)"
+    [ -z "$cert_key" ] && echo "  - clé de certifs  MANQUANTE  (kubeadm init phase upload-certs)"
+    echo
+    echo "  join_cmd = ${join_cmd:-<vide>}"
+    echo
+    echo "  Si l'erreur ci-dessus mentionne « x509: certificate is valid for … not 10.0.2.15 »,"
+    echo "  c'est que kubeadm a visé la carte NAT partagée au lieu de l'IP host-only du node."
+    echo "  Cette version passe --config pour l'éviter : vérifie que ${CONFIG} existe bien."
+  } >&2
   exit 1
 fi
 

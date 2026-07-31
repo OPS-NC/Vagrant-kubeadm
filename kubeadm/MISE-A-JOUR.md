@@ -252,7 +252,7 @@ kubectl uncordon k8s-cp2
 ```
 
 > ⚠️ La VIP `192.168.56.5` se déplace toute seule pendant qu'un control plane redémarre : le
-> test de santé de keepalived (`/livez` toutes les 3 s, `weight -30`) fait passer le node en
+> test de santé de keepalived (`/livez/ping` toutes les 3 s, `weight -30`) fait passer le node en
 > cours de redémarrage derrière un pair sain. C'est exactement la bascule que ce lab existe pour
 > démontrer — regarde-la se produire :
 > ```bash

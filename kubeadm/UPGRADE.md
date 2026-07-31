@@ -249,7 +249,7 @@ kubectl uncordon k8s-cp2
 ```
 
 > ⚠️ The `192.168.56.5` VIP moves on its own while a control plane restarts: keepalived's health
-> check (`/livez` every 3 s, `weight -30`) drops the restarting node behind a healthy peer. That
+> check (`/livez/ping` every 3 s, `weight -30`) drops the restarting node behind a healthy peer. That
 > is exactly the failover this lab exists to demonstrate — watch it happen:
 > ```bash
 > while true; do curl -sk -o /dev/null -w '%{http_code} ' https://192.168.56.5:6443/livez; sleep 1; done
