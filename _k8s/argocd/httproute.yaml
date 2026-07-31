@@ -1,0 +1,26 @@
+# Expose l'UI (et l'API/gRPC-web) d'Argo CD via la Gateway API, en HTTPS, sous
+# `argo.kubeadm.lab.example.io`. Le cert est le wildcard `*.kubeadm.lab.example.io` déjà porté
+# par l'écouteur `https` de `main-gateway` (cert-manager) — AUCUN nouveau Certificate
+# n'est nécessaire, le wildcard couvre `argo.kubeadm.lab.example.io`.
+#
+# La route vit dans le namespace `argocd` mais s'attache au Gateway du namespace
+# `envoy-gateway-system` : possible car `main-gateway` ouvre ses écouteurs à `from: All`.
+# Le backend `argocd-server` est dans le même namespace que la route → pas de
+# ReferenceGrant à créer.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: argocd-server
+  namespace: argocd
+spec:
+  parentRefs:
+    - name: main-gateway
+      namespace: envoy-gateway-system
+      sectionName: https          # cible l'écouteur TLS :443
+  hostnames:
+    - argo.kubeadm.lab.example.io        # matche le wildcard *.kubeadm.lab.example.io
+  rules:
+    - backendRefs:
+        # server.insecure=true => le port http (80) sert l'UI + gRPC-web en clair.
+        - name: argocd-server
+          port: 80

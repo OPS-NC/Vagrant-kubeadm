@@ -1,0 +1,16 @@
+# Namespace de la pile d'observabilité.
+#
+# PodSecurity `privileged` : requis par node-exporter (hostNetwork/hostPID/hostPath/hostPort)
+# ET par Alloy (hostPath /var/log/pods pour lire les logs).
+# Un cluster kubeadm n'applique AUCUN niveau PodSecurity par défaut : ces étiquettes ne
+# changent donc rien aujourd'hui. On les garde parce qu'elles documentent l'intention et
+# gardent le namespace fonctionnel si l'admission est durcie plus tard
+# (--admission-control-config-file sur l'apiserver).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/warn: privileged

@@ -1,0 +1,15 @@
+# Namespace applicatif + ServiceAccount que VSO utilisera pour se logger à Vault.
+# Le nom du SA ("vso-app") et le namespace ("demo") DOIVENT matcher le role Vault
+# (bound_service_account_names / bound_service_account_namespaces, cf. vault/02-roles.sh).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo
+---
+# Le token de ce ServiceAccount est le "sésame" présenté à Vault. Aucun secret n'y est stocké :
+# VSO demande un token projeté (audience "vault") à la volée au moment du login.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vso-app
+  namespace: demo

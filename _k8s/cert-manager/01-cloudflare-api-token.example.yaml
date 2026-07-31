@@ -1,0 +1,24 @@
+# Token API Cloudflare pour le solver ACME DNS-01 (crée/supprime les TXT
+# _acme-challenge.kubeadm.lab.example.io le temps de la validation Let's Encrypt).
+#
+# ⚠️ NE PAS committer le VRAI token. Deux options :
+#   1. (recommandé) créer le secret sans fichier :
+#        kubectl create secret generic cloudflare-api-token \
+#          -n cert-manager --from-literal=api-token='<TON_TOKEN>'
+#   2. copier ce fichier en 01-cloudflare-api-token.yaml (à gitignorer) et le remplir.
+#
+# Le secret DOIT être dans le namespace `cert-manager` : un ClusterIssuer lit ses
+# secrets dans le namespace du contrôleur (--cluster-resource-namespace, défaut cert-manager).
+#
+# Permissions du token (Cloudflare > My Profile > API Tokens > Create Token) :
+#   - Zone / DNS / Edit
+#   - Zone / Zone / Read
+#   scopées sur la zone `example.io`.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cloudflare-api-token
+  namespace: cert-manager
+type: Opaque
+stringData:
+  api-token: "<COLLE_TON_TOKEN_CLOUDFLARE_ICI>"

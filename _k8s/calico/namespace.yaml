@@ -1,0 +1,34 @@
+# Namespace de l'opérateur Tigera.
+#
+# PodSecurity `privileged` : l'opérateur tourne en `hostNetwork` (c'est ce qui lui permet de
+# démarrer alors qu'AUCUN CNI n'est encore installé — sans réseau pod, un pod normal n'aurait
+# pas d'IP) et monte le hostPath `/var/lib/calico`.
+#
+# Sur kubeadm, l'admission PodSecurity n'applique RIEN au niveau cluster par défaut : ces
+# labels ne débloquent donc rien aujourd'hui. On les garde parce qu'ils DOCUMENTENT ce dont
+# l'opérateur a besoin et qu'ils le protègent le jour où l'admission est durcie (Kyverno, un
+# `AdmissionConfiguration` par défaut, un cluster managé). Dans ce cas de figure — ou sur un
+# cluster dont le défaut serait `baseline` — leur absence donne un échec SILENCIEUX : le
+# Deployment est bien créé, mais le ReplicaSet ne peut créer AUCUN pod :
+#
+#   Error creating: pods "tigera-operator-..." is forbidden: violates PodSecurity
+#   "baseline:latest": host namespaces (hostNetwork=true), hostPath volumes
+#   (volume "var-lib-calico")
+#
+# Symptôme trompeur : `kubectl -n tigera-operator get pods` ne renvoie RIEN (pas un pod en
+# erreur, zéro pod) et le script échoue sur le timeout du `rollout status`. La cause est dans
+# les events du ReplicaSet : `kubectl -n tigera-operator describe rs`.
+#
+# `helm --create-namespace` ne pose aucun label PSS : on crée donc le namespace nous-mêmes,
+# AVANT le chart. Même recette que ../observability/namespace.yaml.
+#
+# Note : le namespace `calico-system` (calico-node, typha) est créé par l'opérateur lui-même,
+# qui y pose les labels PSS `privileged` — il n'y a rien à faire de ce côté.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tigera-operator
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/warn: privileged

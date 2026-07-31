@@ -1,0 +1,35 @@
+# cilium-l2.yml — le « cloud provider » du lab : une plage d'IP pour les Services
+# `type: LoadBalancer` + l'annonce ARP qui les rend joignables depuis l'hôte.
+#
+# Les valeurs écrites ici sont les DÉFAUTS du lab. `_k8s/cilium/cilium-up.sh` les
+# substitue à la volée : la plage vient de `LB_POOL_START`/`LB_POOL_END` (lab.env) et
+# le nom de l'interface de `HOSTONLY_IF` (_out/cluster.env, DÉTECTÉ dans la VM).
+---
+apiVersion: "cilium.io/v2"
+kind: CiliumLoadBalancerIPPool
+metadata:
+  name: lb-pool-56
+spec:
+  blocks:
+  - start: "192.168.56.200"
+    stop:  "192.168.56.230"
+---
+apiVersion: "cilium.io/v2alpha1"
+kind: CiliumL2AnnouncementPolicy
+metadata:
+  name: l2-lb-workers
+spec:
+  # annonce les IPs de Services type LoadBalancer
+  loadBalancerIPs: true
+  # pas d'annonce depuis le control-plane
+  # ⚠️ avec WORKERS=0, ce sélecteur ne retient AUCUN node : plus personne n'annonce et
+  #    le Service du Gateway reste injoignable. Retire alors le nodeSelector.
+  nodeSelector:
+    matchExpressions:
+    - key: node-role.kubernetes.io/control-plane
+      operator: DoesNotExist
+  # Annonce uniquement sur l'interface host-only — JAMAIS la carte NAT `eth0`/`enp0s3`
+  # (10.0.2.15, la même adresse sur toutes les VM) : l'hôte ne la voit pas.
+  # Le nom est substitué par cilium-up.sh depuis HOSTONLY_IF.
+  interfaces:
+  - ^enp0s8$

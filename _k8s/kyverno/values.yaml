@@ -1,0 +1,43 @@
+# values.yaml — Kyverno pour le lab kubeadm (chart kyverno/kyverno).
+#
+# Kyverno = « policy engine » Kubernetes : il valide / mute / génère des ressources
+# à l'admission (webhook) et en arrière-plan (background scan). Il écrit ses verdicts
+# dans des PolicyReport, que Policy Reporter agrège dans une UI (voir policy-reporter-values.yaml).
+#
+# Choix « lab » :
+#   - replicas=1 par contrôleur (allègement ; en prod on met 3 pour l'admission-controller
+#     afin de ne jamais perdre le webhook). Sur des CP à 3 Go (cf. lab.env), on économise.
+#   - resources laissées au défaut du chart (req 128Mi / lim 384Mi, cpu 100m) — déjà sobres.
+#   - securityContext défaut = conforme PodSecurity `restricted` : Kyverno tourne sans
+#     privilège, rien à labelliser. kubeadm n'applique AUCUN niveau PodSecurity par défaut
+#     au niveau cluster, mais Kyverno resterait admissible même sous `restricted`.
+#
+# Sécurité importante : le chart exclut déjà `kube-system`, `kube-public`, `kube-node-lease`
+# de ses webhooks (config.resourceFilters). Les composants système ne sont donc JAMAIS
+# soumis aux policies — on ne risque pas de bloquer l'apiserver ou le CNI.
+
+# Kyverno = purement INFORMATIF dans ce lab : il ne doit JAMAIS bloquer une opération.
+#   - forceFailurePolicyIgnore : force TOUS les webhooks en `failurePolicy: Ignore`
+#     (fail-open). Si l'admission-controller est down/lent, l'opération passe quand même —
+#     évite le deadlock « Kyverno KO => plus aucun pod ne peut être créé/supprimé ».
+#   - couplé à `validationFailureAction: Audit` sur les policies (les verdicts sont des
+#     rapports, pas des rejets). Pour un vrai blocage ciblé, repasser une policy en Enforce.
+features:
+  forceFailurePolicyIgnore:
+    enabled: true
+
+# Contrôleur d'admission : applique les policies validate/mutate sur les requêtes entrantes.
+admissionController:
+  replicas: 1
+
+# Contrôleur d'arrière-plan : applique mutate/generate sur l'existant + re-scan périodique.
+backgroundController:
+  replicas: 1
+
+# Contrôleur de nettoyage : exécute les CleanupPolicy (TTL sur ressources). Léger.
+cleanupController:
+  replicas: 1
+
+# Contrôleur de rapports : produit les PolicyReport consommés par Policy Reporter.
+reportsController:
+  replicas: 1

@@ -1,0 +1,34 @@
+# VaultAuthGlobal : mutualise la config d'auth entre plusieurs namespaces (DRY, multi-tenant).
+# Au lieu de répéter method/mount/connexion dans chaque VaultAuth, on centralise ici et chaque
+# VaultAuth n'apporte que ce qui lui est propre (le role) via vaultAuthGlobalRef.
+# ÉTAT DE L'ART 2026 pour un cluster à plusieurs équipes. Facultatif pour un lab mono-app.
+---
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultAuthGlobal
+metadata:
+  name: global-kubernetes
+  namespace: vault-secrets-operator      # namespace "de confiance" qui héberge le global
+spec:
+  vaultConnectionRef: default            # le VaultConnection posé par values.yaml
+  defaultAuthMethod: kubernetes
+  defaultMount: kubernetes
+  # Restreint QUELS namespaces K8s peuvent référencer ce global (cadrage multi-tenant).
+  allowedNamespaces:
+    - demo
+  kubernetes:
+    serviceAccount: vso-app
+    audiences:
+      - vault
+---
+# Un VaultAuth "léger" qui hérite du global et n'ajoute que son role.
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultAuth
+metadata:
+  name: vault-auth-static-global
+  namespace: demo
+spec:
+  vaultAuthGlobalRef:
+    name: global-kubernetes
+    namespace: vault-secrets-operator
+  kubernetes:
+    role: vso-static           # seul le role est spécifique ; le reste vient du global

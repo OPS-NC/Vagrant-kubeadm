@@ -1,0 +1,48 @@
+# 20 — GENERATE : crée une NetworkPolicy « default-deny » dans les namespaces OPT-IN.
+#
+# Pédagogie : le 3e superpouvoir de Kyverno. `generate` CRÉE une ressource dérivée quand
+# un déclencheur apparaît. Cas d'école : chaque nouveau namespace devrait démarrer avec un
+# default-deny réseau. Ici on NE cible QUE les namespaces portant le label
+# `kyverno-demo: "true"` — sinon un default-deny cluster-wide couperait le trafic des
+# autres démos du lab (WordPress, Vault, Argo…). En formation : labelliser un namespace
+# de test suffit à voir la NetworkPolicy apparaître toute seule.
+#
+#   kubectl create ns demo-netpol
+#   kubectl label ns demo-netpol kyverno-demo=true
+#   kubectl -n demo-netpol get netpol      # default-deny générée par Kyverno
+#
+# `synchronize: true` => si on édite/supprime la NetworkPolicy générée, Kyverno la remet.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: generate-default-netpol
+  annotations:
+    policies.kyverno.io/title: Generate default-deny NetworkPolicy (opt-in)
+    policies.kyverno.io/category: Sécurité réseau
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Génère une NetworkPolicy default-deny dans tout namespace labellisé
+      `kyverno-demo=true`. Démonstration de la génération de ressources.
+spec:
+  rules:
+    - name: default-deny
+      match:
+        any:
+          - resources:
+              kinds: [Namespace]
+              selector:
+                matchLabels:
+                  kyverno-demo: "true"
+      generate:
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        name: default-deny
+        namespace: "{{request.object.metadata.name}}"
+        synchronize: true
+        data:
+          spec:
+            # Sélecteur vide = s'applique à TOUS les pods du namespace.
+            podSelector: {}
+            policyTypes:
+              - Ingress
+              - Egress

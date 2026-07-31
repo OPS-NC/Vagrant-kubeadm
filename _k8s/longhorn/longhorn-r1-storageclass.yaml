@@ -1,0 +1,27 @@
+# StorageClass Longhorn « socle » à 1 réplica bloc — mutualisée par les addons.
+#
+# La StorageClass `longhorn` par défaut réplique chaque volume sur 3 nodes (3 copies bloc).
+# `longhorn-r1` n'en garde qu'UNE. À utiliser quand la réplication bloc est superflue :
+#   - donnée reconstructible / jetable   → observability (Prometheus, Loki, Grafana) ;
+#   - réplication déjà faite au niveau applicatif → CloudNativePG (3 instances Postgres).
+#
+# Bénéfice : ~3× moins de disque consommé (crucial sur le disque unique de la box, partagé
+# entre l'OS, les images conteneurs et Longhorn : empiler des volumes 3-réplicas y déclenche
+# des ReplicaSchedulingFailure).
+# Contrepartie : si le node hébergeant la copie meurt, le volume est perdu — acceptable pour
+# les cas ci-dessus (la donnée est reconstruite : re-scrape Prometheus, rebuild réplica CNPG…).
+#
+# Définie UNE seule fois ici (socle) ; consommée par _k8s/cloudnative-pg/ et _k8s/observability/.
+# Appliquer après l'install de Longhorn : kubectl apply -f _k8s/longhorn/longhorn-r1-storageclass.yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: longhorn-r1
+provisioner: driver.longhorn.io
+allowVolumeExpansion: true
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+parameters:
+  numberOfReplicas: "1"
+  staleReplicaTimeout: "30"
+  fsType: "ext4"

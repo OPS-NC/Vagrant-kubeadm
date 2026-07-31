@@ -1,0 +1,23 @@
+# VaultDynamicSecret : génère des credentials ÉPHÉMÈRES (ici base de données) -> Secret K8s.
+# Vault crée un couple user/password temporaire (lease) à la demande ; VSO le renouvelle avant
+# expiration (renewalPercent) et le révoque à la suppression (revoke). Aucun cred long à gérer.
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultDynamicSecret
+metadata:
+  name: dynamic-db
+  namespace: demo
+spec:
+  vaultAuthRef: vault-auth-dynamic    # -> role Vault vso-dynamic -> policy vso-dynamic-db
+  mount: db                           # moteur database monté sur db/
+  path: creds/demo-app                # role database (cf. vault/00-secrets-engines.sh)
+  # requestHTTPMethod: GET            # défaut pour creds/ ; POST si le role prend des params
+  # params: {}                        # paramètres passés à Vault (ex. ttl)
+  renewalPercent: 67                  # renouvelle le lease à 67 % de sa durée (avant expiration)
+  revoke: true                        # révoque le lease quand ce CR est supprimé
+  allowStaticCreds: false             # true seulement pour les "static roles" (rotation par Vault)
+  rolloutRestartTargets:
+    - kind: Deployment
+      name: demo-app                  # redémarre l'app à chaque rotation des creds
+  destination:
+    create: true
+    name: dynamic-db                  # Secret produit : clés username / password (+ lease infos)

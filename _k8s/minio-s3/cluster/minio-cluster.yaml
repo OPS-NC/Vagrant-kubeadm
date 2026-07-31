@@ -1,0 +1,142 @@
+# minio-cluster.yaml — MinIO DISTRIBUÉ 4 nœuds (erasure coding) sur le lab kubeadm.
+#
+# 4 pods StatefulSet, 1 drive (PVC local-path) par pod, 1 pod par worker (anti-affinité) :
+# MinIO erasure-code les objets sur les 4 drives → RÉSILIENT (tolère la perte de ~2 nœuds)
+# SANS Longhorn : MinIO se réplique lui-même (comme CNPG pour Postgres).
+#
+# Pourquoi 4 (et pas 3) : MinIO exige un minimum de 4 drives par erasure set, répartis
+# UNIFORMÉMENT. 4 drives sur 3 nœuds ne se distribue pas uniformément → non viable. Avec
+# 1 drive/pod, il faut donc 4 pods = 4 nœuds. (3 nœuds n'est possible qu'avec ≥2 drives/nœud.)
+#
+# Namespace dédié `minio-cluster` (coexiste avec le MinIO standalone de ../). Exposé sur :
+#   - API S3   : https://minio-cluster.kubeadm.lab.example.io          (9000)
+#   - Console  : https://minio-cluster-console.kubeadm.lab.example.io  (9001, admin — image pigsty)
+#
+# Le Secret `minio-creds` (root user/password) est créé par minio-cluster-up.sh (hors manifeste).
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: minio-cluster
+---
+# Service HEADLESS : donne à chaque pod un DNS stable minio-N.minio-hl... (découverte des pairs).
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio-hl
+  namespace: minio-cluster
+  labels: { app: minio-cluster }
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true      # les pairs doivent se résoudre AVANT d'être "ready"
+  selector: { app: minio-cluster }
+  ports:
+    - { name: api, port: 9000 }
+    - { name: console, port: 9001 }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: minio
+  namespace: minio-cluster
+  labels: { app: minio-cluster }
+spec:
+  serviceName: minio-hl
+  replicas: 4
+  podManagementPolicy: Parallel       # CRUCIAL : les 4 pods démarrent ENSEMBLE (ils s'attendent)
+  selector:
+    matchLabels: { app: minio-cluster }
+  template:
+    metadata:
+      labels: { app: minio-cluster }
+    spec:
+      securityContext: { runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000 }
+      # 1 pod par node (drive node-local) → erasure coding réparti sur 4 workers distincts.
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels: { app: minio-cluster }
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: minio
+          image: docker.io/pgsty/minio:RELEASE.2026-06-18T00-00-00Z   # fork Pigsty (récent + console admin)
+          args:
+            - server
+            # Expansion d'ellipse MinIO : les 4 pairs minio-0..3 via le service headless.
+            - http://minio-{0...3}.minio-hl.minio-cluster.svc.cluster.local:9000/data
+            - --console-address
+            - ":9001"
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom: { secretKeyRef: { name: minio-creds, key: root-user } }
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom: { secretKeyRef: { name: minio-creds, key: root-password } }
+            - name: MINIO_BROWSER_REDIRECT_URL
+              value: https://minio-cluster-console.kubeadm.lab.example.io
+          ports:
+            - { name: api, containerPort: 9000 }
+            - { name: console, containerPort: 9001 }
+          startupProbe:                # laisse le temps au quorum de se former au boot
+            httpGet: { path: /minio/health/live, port: api }
+            failureThreshold: 30
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /minio/health/live, port: api }
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: { path: /minio/health/ready, port: api }
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 1Gi }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 10Gi
+---
+# Service CLIENT (ClusterIP) : équilibre sur les 4 pods, cible des HTTPRoutes.
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: minio-cluster
+  labels: { app: minio-cluster }
+spec:
+  type: ClusterIP
+  selector: { app: minio-cluster }
+  ports:
+    - { name: api, port: 9000, targetPort: api }
+    - { name: console, port: 9001, targetPort: console }
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: minio-cluster-api
+  namespace: minio-cluster
+spec:
+  parentRefs:
+    - { name: main-gateway, namespace: envoy-gateway-system, sectionName: https }
+  hostnames: [minio-cluster.kubeadm.lab.example.io]
+  rules:
+    - backendRefs: [{ name: minio, port: 9000 }]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: minio-cluster-console
+  namespace: minio-cluster
+spec:
+  parentRefs:
+    - { name: main-gateway, namespace: envoy-gateway-system, sectionName: https }
+  hostnames: [minio-cluster-console.kubeadm.lab.example.io]
+  rules:
+    - backendRefs: [{ name: minio, port: 9001 }]

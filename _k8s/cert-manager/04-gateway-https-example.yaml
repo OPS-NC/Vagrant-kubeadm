@@ -1,0 +1,48 @@
+# Gateway `main-gateway` AVEC écouteur HTTPS wildcard + intégration cert-manager.
+#
+# À FUSIONNER dans _k8s/envoy-gateway/Envoy-Proxy.yml (bloc Gateway), ou à appliquer tel
+# quel (il REMPLACE le Gateway existant — mêmes name/namespace).
+#
+# Mécanique (nécessite cert-manager installé avec config.enableGatewayAPI=true) :
+#   1. cert-manager voit l'annotation + l'écouteur TLS avec un certificateRefs.
+#   2. Il crée un Certificate pour *.kubeadm.lab.example.io (dnsNames déduits du `hostname`).
+#   3. Il le résout en DNS-01 Cloudflare et remplit le Secret `wildcard-kubeadm-lab-example-io-tls`.
+#   4. Envoy sert ce cert sur :443.
+#
+# Le Secret et le Certificate sont créés dans le namespace du Gateway (ici `envoy-gateway-system`).
+#
+# Domaine NEUTRE (dépôt public) : `kubeadm.lab.example.io`. Le vrai Gateway du lab
+# (`../envoy-gateway/Envoy-Proxy.yml`) reçoit `LAB_DOMAIN` via platform-up.sh ; ce fichier-ci
+# est un EXEMPLE non appliqué — si tu t'en sers, substitue toi-même le hostname ET le nom du
+# Secret (`wildcard-<domaine-en-tirets>-tls`).
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: main-gateway
+  namespace: envoy-gateway-system
+  annotations:
+    # letsencrypt-staging (défaut du lab) pour itérer, letsencrypt-prod pour un cert trusté.
+    # ⚠️ prod = 5 certificats/semaine max pour un même wildcard, et chaque `vagrant destroy`
+    # en brûle un (le wildcard ne vit que dans etcd). Cf. LAB_ACME_ISSUER dans lab.env.example.
+    cert-manager.io/cluster-issuer: letsencrypt-staging
+spec:
+  gatewayClassName: envoy
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: All
+    - name: https
+      protocol: HTTPS
+      port: 443
+      hostname: "*.kubeadm.lab.example.io"
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: wildcard-kubeadm-lab-example-io-tls     # rempli automatiquement par cert-manager
+      allowedRoutes:
+        namespaces:
+          from: All

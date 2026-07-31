@@ -1,0 +1,97 @@
+# alloy-values.yaml — Grafana Alloy : collecte les logs des pods et les pousse vers Loki.
+#
+# Alloy remplace Promtail (déprécié). Mode **DaemonSet lisant les fichiers /var/log/pods**
+# (comme Promtail), PAS le streaming via l'API Kubernetes.
+#
+# POURQUOI le mode fichier : lire les logs via `loki.source.kubernetes` (API) fait transiter
+# TOUS les logs de pods à travers le kube-apiserver — charge énorme qui, sur ce lab, a
+# contribué à saturer les control-planes. En lisant directement /var/log/pods sur chaque
+# node (un DaemonSet, une part par node), l'apiserver n'est PAS sollicité pour les logs :
+# `discovery.kubernetes` ne fait qu'un watch léger de métadonnées pour étiqueter les lignes.
+
+controller:
+  type: daemonset
+  # Tolère tout → un Alloy sur CHAQUE node, y compris les control-planes (logs apiserver/etcd).
+  tolerations:
+    - operator: Exists
+
+alloy:
+  # Lit /var/log/pods (fichiers appartenant à root) → tourne en root dans ce ns privileged.
+  securityContext:
+    runAsUser: 0
+    runAsGroup: 0
+    runAsNonRoot: false
+  # Monte /var/log (hostPath) dans le conteneur → accès aux fichiers de log des pods.
+  mounts:
+    varlog: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+  configMap:
+    content: |-
+      // 1. Découvre les pods (métadonnées seulement — watch léger, pas de logs via l'API).
+      discovery.kubernetes "pods" {
+        role = "pod"
+      }
+
+      // 2. Étiquette + construit le chemin du fichier de log de chaque conteneur.
+      discovery.relabel "pod_logs" {
+        targets = discovery.kubernetes.pods.targets
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+          target_label  = "app"
+        }
+        // Chemin du fichier : /var/log/pods/<ns>_<pod>_<ID>/<container>/*.log
+        // On glob <ID> avec `*` car il DIFFÈRE selon le type de pod :
+        //   - pod normal      => <ID> = UID API (__meta_kubernetes_pod_uid)
+        //   - static/mirror pod (kube-apiserver, etcd, scheduler, controller-manager, posés
+        //     par kubeadm dans /etc/kubernetes/manifests)
+        //     => <ID> = HASH de config du static pod, PAS l'UID API. Construire le chemin à
+        //     partir de l'UID raterait donc tous les logs du control-plane. On matche plutôt
+        //     par <ns>_<pod>_* (nom stable) pour couvrir les deux cas.
+        rule {
+          source_labels = ["__meta_kubernetes_namespace", "__meta_kubernetes_pod_name", "__meta_kubernetes_pod_container_name"]
+          separator     = "/"
+          regex         = "([^/]+)/([^/]+)/([^/]+)"
+          action        = "replace"
+          replacement   = "/var/log/pods/$1_$2_*/$3/*.log"
+          target_label  = "__path__"
+        }
+      }
+
+      // 3. Ne suit QUE les fichiers présents sur ce node (les autres globs ne matchent rien).
+      local.file_match "pod_logs" {
+        path_targets = discovery.relabel.pod_logs.output
+      }
+
+      // 4. Lit les fichiers, puis parse le format CRI de containerd.
+      loki.source.file "pod_logs" {
+        targets    = local.file_match.pod_logs.targets
+        forward_to = [loki.process.pod_logs.receiver]
+      }
+      loki.process "pod_logs" {
+        stage.cri {}
+        forward_to = [loki.write.default.receiver]
+      }
+
+      // 5. Pousse vers Loki (gateway du même namespace).
+      loki.write "default" {
+        endpoint {
+          url = "http://loki-gateway.monitoring.svc.cluster.local/loki/api/v1/push"
+        }
+      }

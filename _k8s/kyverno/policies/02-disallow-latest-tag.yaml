@@ -1,0 +1,42 @@
+# 02 — VALIDATE (Audit) : interdit le tag d'image `:latest` (ou l'absence de tag).
+#
+# Pédagogie : deux règles dans une même policy + usage des opérateurs sur les images.
+# `:latest` casse la reproductibilité (on ne sait pas quelle version tourne) et le
+# rollback. Mode Audit : on repère les coupables dans l'UI sans casser l'existant.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-latest-tag
+  annotations:
+    policies.kyverno.io/title: Disallow latest tag
+    policies.kyverno.io/category: Bonnes pratiques
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Les images doivent être épinglées à un tag explicite (pas `:latest`, pas
+      d'absence de tag). Mode Audit.
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: require-image-tag
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      validate:
+        message: "Une image doit avoir un tag explicite."
+        pattern:
+          spec:
+            containers:
+              - image: "*:*"          # doit contenir un ':' → un tag présent
+    - name: validate-image-tag
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      validate:
+        message: "Le tag d'image `:latest` est interdit."
+        pattern:
+          spec:
+            containers:
+              - image: "!*:latest"    # ne doit PAS finir par :latest

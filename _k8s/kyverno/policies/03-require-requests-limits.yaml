@@ -1,0 +1,38 @@
+# 03 — VALIDATE (Audit) : exige requests ET limits (cpu+mémoire) sur chaque conteneur.
+#
+# Pédagogie : lien direct avec la contrainte de ce lab (etcd/CP à faible RAM). Sans
+# requests/limits, un Pod peut affamer un node. Kyverno permet de garantir que TOUT
+# conteneur déclare ses ressources. Mode Audit ici — voir combien de workloads du lab
+# sont déjà hors-clou dans l'UI.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-requests-limits
+  annotations:
+    policies.kyverno.io/title: Require resource requests and limits
+    policies.kyverno.io/category: Fiabilité
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Chaque conteneur doit déclarer requests et limits (cpu + memory) pour éviter
+      la famine de ressources sur les nodes. Mode Audit.
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: validate-resources
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      validate:
+        message: "requests et limits (cpu + memory) sont requis sur chaque conteneur."
+        pattern:
+          spec:
+            containers:
+              - resources:
+                  requests:
+                    memory: "?*"
+                    cpu: "?*"
+                  limits:
+                    memory: "?*"
+                    cpu: "?*"

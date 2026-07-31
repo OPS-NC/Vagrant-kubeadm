@@ -1,0 +1,118 @@
+# installation.yaml — la CR `Installation` de l'opérateur Tigera : c'est ELLE qui décrit
+# le CNI Calico à déployer (l'opérateur, seul, ne fait rien tant qu'elle n'existe pas).
+#
+# Appliquée par `_k8s/calico/calico-up.sh` APRÈS le chart `tigera-operator`, parce que
+# c'est l'opérateur (`-manage-crds=true`) qui crée les CRD `operator.tigera.io` à son
+# démarrage : appliquer ce fichier trop tôt échoue sur « no matches for kind Installation ».
+#
+# Le chart sait générer cette CR lui-même (`installation.enabled=true`, son défaut). On la
+# sort du chart (`--set installation.enabled=false` dans le script) pour une seule raison :
+# avoir UN fichier lisible et versionné, au lieu d'une pile de `--set` imbriqués — et éviter
+# que Helm et `kubectl apply` se disputent la propriété du même objet.
+#
+# Les deux CIDR ci-dessous sont substitués à la volée par calico-up.sh (`POD_CIDR`, lu en
+# priorité dans `_out/cluster.env`, et `NETWORK` de lab.env) : les valeurs écrites ici sont
+# les défauts du lab.
+---
+apiVersion: operator.tigera.io/v1
+kind: Installation
+metadata:
+  name: default
+spec:
+  # Calico open source (pas la variante Tigera Enterprise).
+  variant: Calico
+
+  # Réplicas des composants « control plane » de Calico (Typha, calico-apiserver).
+  # 2 suffit largement pour un lab de 8 nodes ; c'est aussi le défaut de l'opérateur.
+  controlPlaneReplicas: 2
+
+  # ------------------------------------------------------------------------------------
+  # ALLÈGEMENT n°1 — driver CSI de Calico désactivé.
+  # `kubeletVolumePluginPath` non renseigné => l'opérateur déploie en plus le DaemonSet
+  # `csi-node-driver` et monte `/var/lib/kubelet`. Sur Debian ça marcherait très bien, mais
+  # ce CSI ne sert qu'aux volumes éphémères de flow logs, inutilisés ici : `None` supprime
+  # un DaemonSet par node sans rien perdre.
+  kubeletVolumePluginPath: None
+
+  # ALLÈGEMENT n°2 — FlexVolume désactivé.
+  # Sans ce champ, l'opérateur ajoute à `calico-node` un init-container `flexvol-driver`
+  # qui monte `/usr/libexec/kubernetes/kubelet-plugins/volume/exec/` en `DirectoryOrCreate`
+  # (cf. tigera/operator, pkg/render/node.go). FlexVolume est déprécié depuis Kubernetes
+  # 1.23 et ne sert ici qu'au socket UDS de Dikastes (policy applicative L7), inutilisé.
+  # `None` supprime purement et simplement l'init-container et son volume.
+  flexVolumePath: None
+
+  calicoNetwork:
+    # --------------------------------------------------------------------------------
+    # BGP DÉSACTIVÉ. C'est un choix assumé, pas un oubli : le lab tourne sur un réseau
+    # host-only VirtualBox, il n'y a aucun routeur avec qui peer. Sans pair BGP, BIRD ne
+    # sert à rien — et c'est précisément pour ça que Calico ne peut PAS annoncer d'IP de
+    # Service `LoadBalancer` ici (l'annonce de service IP de Calico n'existe qu'en BGP,
+    # il n'a pas d'équivalent de l'annonce L2/ARP de Cilium). Voir README.md.
+    bgp: Disabled
+
+    # Dataplane iptables (le défaut de l'opérateur), explicite pour que ce soit un choix
+    # relu et non un hasard :
+    #  - on GARDE le kube-proxy posé par `kubeadm init` (mode iptables). C'est la raison
+    #    pour laquelle `CNI=calico` EXIGE `KUBE_PROXY_REPLACEMENT=false` : rien ici ne
+    #    remplace kube-proxy, et cluster-up.sh refuse déjà le couple inverse ;
+    #  - le dataplane BPF de Calico exigerait en plus `bpfNetworkBootstrap`,
+    #    `kubeProxyManagement: Enabled` et une `FelixConfiguration` (`cgroupV2Path`).
+    #    Trop de pièces mobiles pour le CNI « de comparaison » du lab : si on veut de
+    #    l'eBPF dans ce lab, on prend Cilium.
+    linuxDataplane: Iptables
+
+    # Corollaire du point précédent : l'opérateur ne touche PAS au DaemonSet kube-proxy
+    # (c'est déjà son défaut, écrit noir sur blanc pour éviter toute surprise).
+    kubeProxyManagement: Disabled
+
+    # MTU du réseau pod : 1500 (host-only) - 50 (entêtes VXLAN IPv4) = 1450.
+    # Calico l'auto-détecte, on la fixe pour que la valeur soit lisible dans le dépôt.
+    mtu: 1450
+
+    # --------------------------------------------------------------------------------
+    # ÉPINGLAGE DE L'INTERFACE HOST-ONLY — LE piège récurrent de ce lab (cf. CLAUDE.md).
+    #
+    # Chaque VM a DEUX cartes : la NAT (`eth0`/`enp0s3`, 10.0.2.15, **la même adresse sur
+    # toutes les VMs**, qui porte la route par défaut) et la host-only (`enp0s8`/`eth1`,
+    # 192.168.56.x, la seule identité réellement unique). L'autodétection par défaut de
+    # Calico (`firstFound`) suit la route par défaut : tous les nodes se déclareraient avec
+    # 10.0.2.15, tous les tunnels VXLAN pointeraient vers un NAT isolé => trafic pod
+    # cross-node et DNS (CoreDNS sur un autre node) cassés. Même cause que le
+    # `--iface-can-reach` de flannel et le `devices=<host-only>` de Cilium.
+    #
+    # `cidrs` force Calico à retenir l'adresse du node qui tombe dans le réseau host-only,
+    # sans dépendre du nom de la carte. Équivalent possible : `kubernetes: NodeInternalIP`
+    # (kubeadm/templates/kubeadm-init.yaml.tpl pose déjà `node-ip` sur l'IP host-only) —
+    # `cidrs` est plus explicite. Un node sans adresse dans cette plage fait échouer
+    # calico-node : c'est voulu.
+    nodeAddressAutodetectionV4:
+      cidrs:
+        - "192.168.56.0/24"
+
+    ipPools:
+      - name: default-ipv4-ippool
+        # ⚠️ DOIT être identique au `networking.podSubnet` passé à `kubeadm init`
+        # (défaut du lab : 10.244.0.0/16, cf. _out/cluster.env).
+        # Si les deux divergent, kubelet alloue les IP de pod dans un CIDR que Calico
+        # n'a pas programmé : les routes et les tunnels VXLAN ne correspondent à rien.
+        # calico-up.sh refuse de continuer en cas de désaccord.
+        cidr: "10.244.0.0/16"
+
+        # VXLAN **inconditionnel**. Tous les nodes sont sur le même /24, donc
+        # `VXLANCrossSubnet` retomberait sur du routage direct non encapsulé entre eux :
+        # ça suppose que le commutateur virtuel host-only relaie des paquets dont l'IP
+        # source est une IP de pod — non vérifié ici. `VXLAN` encapsule toujours, ne
+        # dépend d'aucune route côté VirtualBox, et c'est le même choix que celui déjà
+        # fait pour flannel (VXLAN) et Cilium (`routingMode=tunnel`).
+        encapsulation: VXLAN
+
+        # SNAT vers l'extérieur du cluster : les pods sortent avec l'IP du node
+        # (la route par défaut passe par la NAT 10.0.2.2 — voulu).
+        natOutgoing: Enabled
+
+        # /26 = 64 IP par bloc et par node ; 10.244.0.0/16 en offre largement assez.
+        blockSize: 26
+
+        # Ce pool s'applique à tous les nodes (control planes inclus).
+        nodeSelector: all()

@@ -1,0 +1,33 @@
+# 01 — VALIDATE (Audit) : exige le label standard `app.kubernetes.io/name` sur les Pods.
+#
+# Pédagogie : la brique de base de Kyverno. `validate` + `pattern` = "la ressource DOIT
+# ressembler à ça". `validationFailureAction: Audit` => on N'EMPÊCHE PAS la création, on
+# consigne juste un résultat `fail` dans un PolicyReport (visible dans l'UI). Passe en
+# `Enforce` pour bloquer réellement (à faire en connaissance de cause : ça refusera tout
+# Pod non conforme, y compris ceux des autres démos du lab).
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-labels
+  annotations:
+    policies.kyverno.io/title: Require app.kubernetes.io/name label
+    policies.kyverno.io/category: Bonnes pratiques
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Tout Pod doit porter le label `app.kubernetes.io/name` (traçabilité,
+      sélecteurs, dashboards). Mode Audit : signale sans bloquer.
+spec:
+  validationFailureAction: Audit
+  background: true              # applique aussi la règle en scan de fond sur l'existant
+  rules:
+    - name: check-app-name-label
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      validate:
+        message: "Le label `app.kubernetes.io/name` est requis."
+        pattern:
+          metadata:
+            labels:
+              app.kubernetes.io/name: "?*"    # ?* = au moins un caractère

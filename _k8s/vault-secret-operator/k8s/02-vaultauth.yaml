@@ -1,0 +1,55 @@
+# VaultAuth : COMMENT s'authentifier à Vault. Ici méthode "kubernetes".
+# Un VaultAuth par usage/role pour rester au moindre privilège (chaque Vault*Secret
+# pointe le VaultAuth correspondant à son role Vault via spec.vaultAuthRef).
+#
+# Le triplet qui doit être cohérent avec Vault :
+#   mount             == chemin du mount auth côté Vault ("kubernetes" -> auth/kubernetes)
+#   kubernetes.role   == nom du role Vault (vault/02-roles.sh)
+#   serviceAccount    \_ doivent matcher bound_service_account_* du role
+#   (namespace du CR) /
+#   audiences         == audience du role Vault ("vault")
+---
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultAuth
+metadata:
+  name: vault-auth-static
+  namespace: demo
+spec:
+  vaultConnectionRef: vault-conn      # ou omettre pour utiliser le "default" de values.yaml
+  method: kubernetes
+  mount: kubernetes
+  kubernetes:
+    role: vso-static
+    serviceAccount: vso-app
+    audiences:
+      - vault
+---
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultAuth
+metadata:
+  name: vault-auth-dynamic
+  namespace: demo
+spec:
+  vaultConnectionRef: vault-conn
+  method: kubernetes
+  mount: kubernetes
+  kubernetes:
+    role: vso-dynamic
+    serviceAccount: vso-app
+    audiences:
+      - vault
+---
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultAuth
+metadata:
+  name: vault-auth-pki
+  namespace: demo
+spec:
+  vaultConnectionRef: vault-conn
+  method: kubernetes
+  mount: kubernetes
+  kubernetes:
+    role: vso-pki
+    serviceAccount: vso-app
+    audiences:
+      - vault

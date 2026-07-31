@@ -1,0 +1,120 @@
+# Démo VSO — ROTATION DE MOT DE PASSE PostgreSQL par Vault (database static role).
+#
+# Vault gère le mot de passe du user PG fixe `vault-rotate` (moteur database, static role) et
+# le fait tourner toutes les 2 min. Le VSO lit `database/static-creds/vault-rotate`, en dérive
+# une CHAÎNE DE CONNEXION complète (SecretTransformation), l'écrit dans le Secret K8s
+# `pg-rotate-creds`, et REDÉMARRE le Deployment alpine à chaque rotation (rolloutRestartTargets).
+#
+# Prérequis : opérateur VSO déployé + ./vault/pg-dynamic-rotate.sh exécuté (moteur database,
+# connexion admin CNPG, static role, policy, role k8s) + cluster CloudNativePG `pg-demo`.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pg-rotate-demo
+---
+# SA présenté à Vault. Doit matcher le role Vault pg-rotate-demo (bound_service_account_*).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pg-rotate
+  namespace: pg-rotate-demo
+---
+# COMMENT s'authentifier à Vault (méthode kubernetes, role pg-rotate-demo, audience vault).
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultAuth
+metadata:
+  name: pg-rotate
+  namespace: pg-rotate-demo
+spec:
+  method: kubernetes
+  mount: kubernetes
+  kubernetes:
+    role: pg-rotate-demo
+    serviceAccount: pg-rotate
+    audiences:
+      - vault
+---
+# Reformate les données brutes du static-creds (username/password) en variables d'ENV prêtes
+# à l'emploi : une chaîne DSN complète + les composants PG* (compatibles psql/libpq).
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: SecretTransformation
+metadata:
+  name: pg-rotate-dsn
+  namespace: pg-rotate-demo
+spec:
+  templates:
+    DATABASE_URL:
+      text: 'postgresql://{{ .Secrets.username }}:{{ .Secrets.password }}@pg-demo-rw.cnpg-demo.svc.cluster.local:5432/vault?sslmode=require'
+    PGHOST:
+      text: 'pg-demo-rw.cnpg-demo.svc.cluster.local'
+    PGPORT:
+      text: '5432'
+    PGDATABASE:
+      text: 'vault'
+    PGUSER:
+      text: '{{ .Secrets.username }}'
+    PGPASSWORD:
+      text: '{{ .Secrets.password }}'
+---
+# QUOI synchroniser : le static-creds du role vault-rotate (moteur database).
+# allowStaticCreds=true => VSO traite un STATIC ROLE (mot de passe rotaté d'un user existant),
+# et se resynchronise au rythme de la rotation (ttl renvoyé par Vault).
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultDynamicSecret
+metadata:
+  name: pg-rotate
+  namespace: pg-rotate-demo
+spec:
+  vaultAuthRef: pg-rotate
+  mount: database
+  path: static-creds/vault-rotate
+  allowStaticCreds: true
+  destination:
+    create: true
+    name: pg-rotate-creds
+    # Ne garde QUE les clés templatées (exclut username/password/ttl/... bruts).
+    transformation:
+      excludes:
+        - ".*"
+      transformationRefs:
+        - name: pg-rotate-dsn
+  # Le cœur de la demande : à chaque rotation du mot de passe, VSO relance ce Deployment.
+  rolloutRestartTargets:
+    - kind: Deployment
+      name: pg-rotate-demo
+---
+# L'appli de test : un pod alpine qui reçoit la chaîne de connexion en variables d'env.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pg-rotate-demo
+  namespace: pg-rotate-demo
+  labels: { app: pg-rotate-demo }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: pg-rotate-demo }
+  template:
+    metadata:
+      labels: { app: pg-rotate-demo }
+    spec:
+      serviceAccountName: pg-rotate
+      containers:
+        - name: alpine
+          image: alpine:3.20
+          # Au démarrage : log la DSN (mot de passe masqué) pour prouver l'injection, puis dort.
+          command:
+            - sh
+            - -c
+            - |
+              echo "[pg-rotate-demo] démarré $(date -u +%H:%M:%S) — DSN injectée :"
+              echo "  DATABASE_URL=$(echo "$DATABASE_URL" | sed 's/:[^:@]*@/:****@/')"
+              echo "  PGUSER=$PGUSER PGDATABASE=$PGDATABASE PGHOST=$PGHOST"
+              exec sleep infinity
+          envFrom:
+            - secretRef:
+                name: pg-rotate-creds     # DATABASE_URL / PGHOST / PGPORT / PGDATABASE / PGUSER / PGPASSWORD
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { memory: 48Mi }

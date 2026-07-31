@@ -1,0 +1,38 @@
+# policy-reporter-values.yaml — Policy Reporter + UI pour visualiser les verdicts Kyverno.
+#
+# Kyverno écrit ses résultats dans des (Cluster)PolicyReport. Policy Reporter watch ces
+# rapports et expose :
+#   - une API + des métriques Prometheus,
+#   - une UI web (dashboard : violations par policy / namespace / sévérité),
+#   - un « plugin kyverno » qui enrichit l'UI avec le détail des policies Kyverno.
+#
+# Exposition : l'UI tourne en clair (port 8080), le HTTPS est assuré par Envoy Gateway
+# (cert wildcard *.kubeadm.lab.example.io). Voir httproute.yaml → kyverno.kubeadm.lab.example.io.
+
+# --- Cœur Policy Reporter -----------------------------------------------------
+# Rétention/scan par défaut : suffisant pour un lab mono-cluster.
+worker: 3
+
+# --- UI web -------------------------------------------------------------------
+ui:
+  enabled: true
+  replicaCount: 1
+  # L'UI doit connaître ses back-ends (core + plugin kyverno) ; le chart câble ça
+  # automatiquement quand ui.enabled + plugin.kyverno.enabled sont vrais.
+
+# --- Plugins (détail des sources dans l'UI) -----------------------------------
+plugin:
+  # Détail des policies Kyverno (validate/mutate/generate).
+  kyverno:
+    enabled: true
+    replicaCount: 1
+  # Remonte les rapports de Trivy Operator (CVE, config audit, secrets, RBAC) dans
+  # cette même UI. Sans effet tant que ../trivy-operator/ n'est pas installé, mais
+  # inoffensif à laisser actif. Voir _k8s/trivy-operator/.
+  trivy:
+    enabled: true
+    replicaCount: 1
+
+# --- Métriques (optionnel : prêt pour un futur Prometheus/kube-prometheus-stack)
+metrics:
+  enabled: true

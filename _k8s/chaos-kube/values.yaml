@@ -1,0 +1,49 @@
+# values.yaml — chaoskube sur ce lab kubeadm.
+# Chart chaoskube 0.6.0 (app 0.39.0). Namespace : chaos-kube.
+#
+# Principe : chaoskube tue UN pod au hasard à chaque `interval`, dans tout le cluster
+# sauf ce qu'on exclut. C'est un injecteur de panne : il sert à vérifier que les
+# Deployments/StatefulSets du lab se reconstruisent tout seuls.
+#
+# ⚠️ `no-dry-run` est ce qui rend chaoskube RÉEL. Sans ce flag, le chart tourne en
+# dry-run (défaut amont) : il logue « would kill … » et ne supprime jamais rien.
+# C'est le piège n°1 — un chaoskube qu'on croit actif alors qu'il ne fait que parler.
+
+replicaCount: 1
+
+chaoskube:
+  args:
+    # Un pod tué par heure (demande du lab).
+    interval: "1h"
+    # Namespaces épargnés. Syntaxe sélecteur : `!ns` = exclusion, séparés par des virgules.
+    #   - kube-system      : tuer coredns / cilium / kube-apiserver casse le cluster, pas
+    #                        une appli — le lab n'a qu'un seul control plane.
+    #   - longhorn-system  : le CSI porte les volumes de TOUT le reste ; tuer un
+    #                        instance-manager démonte des volumes encore montés.
+    #   - vault            : le Raft survit à la perte d'un pod, mais le pod revient SCELLÉ
+    #                        (pas d'auto-unseal ici). En quelques heures les 3 sont scellés
+    #                        et Vault tombe — ça ne teste plus rien, ça demande juste un
+    #                        ../vault-cluster/vault-up.sh manuel à chaque fois.
+    #   - cnpg-demo        : le cluster Postgres de démo (`Cluster/pg-demo`, cf.
+    #                        ../cloudnative-pg/cluster-demo.yaml). L'opérateur, lui, vit dans
+    #                        cnpg-system et reste du gibier : le tuer ne coupe aucune donnée.
+    namespaces: "!kube-system,!longhorn-system,!vault,!cnpg-demo"
+    # Désactive le dry-run : à partir d'ici les pods sont VRAIMENT supprimés.
+    no-dry-run: ""
+    # Fuseau utilisé dans les logs (et par excluded-weekdays / excluded-times-of-day si
+    # on en ajoute un jour). Sans lui chaoskube raisonne en UTC.
+    timezone: "Pacific/Noumea"
+
+# Le lab est serré en RAM (18 Go pour la topo par défaut) : chaoskube ne fait qu'une
+# boucle de sommeil + un appel API par heure, il n'a besoin de rien.
+resources:
+  requests:
+    cpu: 10m
+    memory: 16Mi
+  limits:
+    memory: 64Mi
+
+# Le chart crée le ServiceAccount + le ClusterRole (list/delete pods à l'échelle du
+# cluster) : ces droits sont larges par nature, c'est le métier de l'outil.
+serviceAccount:
+  create: true

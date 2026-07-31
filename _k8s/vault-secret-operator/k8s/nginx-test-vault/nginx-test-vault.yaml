@@ -1,0 +1,83 @@
+# Démo end-to-end VSO : un secret Vault (kubeadm-lab/nginx-test-vault/config) synchronisé en
+# Secret K8s, injecté en variables d'env dans nginx, avec REDÉMARRAGE AUTO du Deployment
+# quand le secret change dans Vault (rolloutRestartTargets + refreshAfter).
+#
+# Prérequis : opérateur VSO déployé + ./vault/kubeadm-lab.sh exécuté (engine + role + secret).
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nginx-test-vault
+---
+# SA présenté à Vault. Doit matcher le role nginx-test-vault (bound_service_account_*).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nginx-test-vault
+  namespace: nginx-test-vault
+---
+# COMMENT s'authentifier à Vault (méthode kubernetes, role nginx-test-vault).
+# Pas de vaultConnectionRef -> utilise la VaultConnection "default" de l'opérateur
+# (values.yaml : http://vault.vault.svc.cluster.local:8200).
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultAuth
+metadata:
+  name: nginx-test-vault
+  namespace: nginx-test-vault
+spec:
+  method: kubernetes
+  mount: kubernetes
+  kubernetes:
+    role: nginx-test-vault
+    serviceAccount: nginx-test-vault
+    audiences:
+      - vault
+---
+# QUOI synchroniser : kubeadm-lab/nginx-test-vault/config (KV-v2) -> Secret K8s "nginx-test-vault-config".
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultStaticSecret
+metadata:
+  name: nginx-test-vault-config
+  namespace: nginx-test-vault
+spec:
+  vaultAuthRef: nginx-test-vault
+  type: kv-v2
+  mount: kubeadm-lab
+  path: nginx-test-vault/config
+  refreshAfter: 30s              # VSO relit Vault toutes les 30s
+  hmacSecretData: true           # détecte la dérive sans logguer les valeurs
+  # Le cœur de la demande : quand le Secret change, VSO redémarre ces cibles.
+  rolloutRestartTargets:
+    - kind: Deployment
+      name: nginx-test-vault
+  destination:
+    create: true                 # VSO crée/maintient le Secret
+    name: nginx-test-vault-config
+---
+# L'appli : nginx qui reçoit le secret en variables d'environnement (envFrom).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-test-vault
+  namespace: nginx-test-vault
+  labels: { app: nginx-test-vault }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: nginx-test-vault }
+  template:
+    metadata:
+      labels: { app: nginx-test-vault }
+    spec:
+      serviceAccountName: nginx-test-vault
+      containers:
+        - name: nginx
+          image: nginx:1.27-alpine
+          envFrom:
+            - secretRef:
+                name: nginx-test-vault-config    # APP_GREETING / APP_COLOR / APP_SECRET_TOKEN
+          ports:
+            - containerPort: 80
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits: { memory: 96Mi }

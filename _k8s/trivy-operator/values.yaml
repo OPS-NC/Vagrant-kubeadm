@@ -1,0 +1,52 @@
+# values.yaml — Trivy Operator pour le lab kubeadm (chart aqua/trivy-operator).
+#
+# Trivy Operator scanne EN CONTINU le cluster et produit des CRDs de rapport :
+#   - VulnerabilityReport   (CVE des images)
+#   - ConfigAuditReport     (mauvaises configs des workloads)
+#   - ExposedSecretReport   (secrets en clair dans les images)
+#   - RbacAssessmentReport  (RBAC trop permissif)
+#   - ClusterComplianceReport (CIS / NSA…)
+#
+# Ces rapports ne sont PAS des PolicyReport wgpolicyk8s : c'est le **plugin trivy** de
+# Policy Reporter (activé dans ../kyverno/policy-reporter-values.yaml) qui les remonte
+# dans la MÊME UI que Kyverno. Un seul tableau de bord sécurité pour tout le lab.
+#
+# Choix « lab » : on limite la concurrence des jobs de scan (chaque job = un pod qui pull
+# l'image + la base de CVE) pour ne pas saturer des nodes modestes, et on réduit le bruit
+# (CVE HIGH/CRITICAL corrigeables uniquement).
+
+operator:
+  # Un seul job de scan à la fois (défaut 10) : aucune parallélisation, les scans sont
+  # sérialisés → charge CPU/RAM étalée, jamais de pic sur le lab.
+  scanJobsConcurrentLimit: 1
+  # Cadence de re-scan : un rapport plus vieux que ce TTL est ré-évalué. À 30 min, chaque
+  # workload est re-scanné ~toutes les 30 min (par vagues, un scan à la fois), puis
+  # l'operator reste au repos entre deux — donc PAS de scan constant.
+  scannerReportTTL: "30m"
+
+  # node-collector ACTIVÉ : les deux scanners « node » passent par un pod `node-collector`
+  # qui bind-monte /etc/systemd, /lib/systemd, /etc/kubernetes… Sur des nodes Debian 13
+  # provisionnés par kubeadm/provision.sh, ces chemins existent et sont lisibles : rien à
+  # contourner, contrairement à un OS immuable sans systemd.
+  # /!\ Ce pod exige hostPID + des hostPath : il n'est PAS admissible sous PodSecurity
+  # `baseline`/`restricted`. kubeadm n'applique aucun niveau au niveau cluster par défaut,
+  # donc il passe tel quel ; si tu durcis l'admission, étiquette le namespace :
+  #   kubectl label ns trivy-system pod-security.kubernetes.io/enforce=privileged
+  # /!\ Coût : un pod de collecte par node à chaque cycle. Sur des VM très modestes,
+  # repasser ces deux clés à `false` reste un arbitrage légitime.
+  infraAssessmentScannerEnabled: true
+  clusterComplianceEnabled: true
+
+trivy:
+  # Mode Standalone : chaque job embarque son scan (simple). Pour un gros cluster, préférer
+  # `builtInTrivyServer: true` (un serveur trivy partagé garde la base de CVE en cache).
+  mode: Standalone
+  # N'affiche que les CVE pour lesquelles un correctif existe (réduit le bruit en formation).
+  ignoreUnfixed: true
+  # On se concentre sur ce qui compte pour une démo.
+  severity: "HIGH,CRITICAL"
+
+# ServiceMonitor Prometheus : DÉSACTIVÉ tant que kube-prometheus-stack n'est pas installé
+# (sinon le CRD ServiceMonitor n'existe pas → échec du helm apply). À passer à true après.
+serviceMonitor:
+  enabled: false
