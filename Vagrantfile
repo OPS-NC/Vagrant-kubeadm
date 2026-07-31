@@ -47,6 +47,7 @@ K8S_VERSION       = ENV["K8S_VERSION"]       || "1.36.3"
 K8S_APT_MINOR     = ENV["K8S_APT_MINOR"]     || "v1.36"
 CONTAINERD_SOURCE = ENV["CONTAINERD_SOURCE"] || "docker"
 REGISTRY_MIRROR   = ENV["REGISTRY_MIRROR"]   || ""
+SYSTEM_UPGRADE    = ENV["SYSTEM_UPGRADE"]    || "true"
 
 # --- Topologie --------------------------------------------------------------
 CONTROL_PLANES = (ENV["CONTROL_PLANES"] || 1).to_i   # 1 = simple ; 3 = HA (quorum etcd)
@@ -183,6 +184,7 @@ Vagrant.configure("2") do |config|
           "K8S_APT_MINOR"     => K8S_APT_MINOR,
           "CONTAINERD_SOURCE" => CONTAINERD_SOURCE,
           "REGISTRY_MIRROR"   => REGISTRY_MIRROR,
+          "SYSTEM_UPGRADE"    => SYSTEM_UPGRADE,
           "HOSTS_ENTRIES"     => HOSTS_ENTRIES,
         }
     end

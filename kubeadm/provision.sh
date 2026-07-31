@@ -7,20 +7,39 @@
 #
 # Ce que ce script pose, dans l'ordre (chaque étape suppose la précédente) :
 #   1. /etc/hosts        résolution déterministe de tous les nodes du lab
-#   2. prérequis noyau   swap coupé, modules, sysctl
-#   3. paquets de base   dont open-iscsi/nfs-common (Longhorn) et conntrack (kube-proxy)
-#   4. containerd        2.x (dépôt Docker) ou 1.7 (Debian), cgroup systemd
-#   5. kubeadm/kubelet/kubectl  version épinglée puis `apt-mark hold`
-#   6. images            pré-tirées, pour que `kubeadm init` ne télécharge plus rien
-#   7. keepalived        VIP de l'API en VRRP — control planes uniquement
+#   2. mise à jour       apt upgrade non interactif, GRUB préconfiguré (cf. étape 2)
+#   3. prérequis noyau   swap coupé, modules, sysctl
+#   4. paquets de base   dont open-iscsi/nfs-common (Longhorn) et conntrack (kube-proxy)
+#   5. containerd        2.x (dépôt Docker) ou 1.7 (Debian), cgroup systemd
+#   6. kubeadm/kubelet/kubectl  version épinglée puis `apt-mark hold`
+#   7. images            pré-tirées, pour que `kubeadm init` ne télécharge plus rien
+#   8. keepalived        VIP de l'API en VRRP — control planes uniquement
 #
 # Idempotent : relançable à volonté (`vagrant provision`).
 #
+# ⚠️ `vagrant provision` N'EST PAS un chemin de montée de version Kubernetes : l'étape 6
+#    réinstalle K8S_VERSION sur TOUS les nodes d'un coup, sans jamais appeler
+#    `kubeadm upgrade`. Bumper lab.env puis reprovisionner mettrait chaque kubelet une
+#    mineure devant l'apiserver. Cf. kubeadm/UPGRADE.md.
+#
 # Variables reçues du Vagrantfile : NODE_NAME NODE_ROLE NODE_INDEX NODE_IP NETWORK
 # VIP CP_IPS VRRP_ROUTER_ID K8S_VERSION K8S_APT_MINOR CONTAINERD_SOURCE
-# REGISTRY_MIRROR HOSTS_ENTRIES
+# REGISTRY_MIRROR HOSTS_ENTRIES SYSTEM_UPGRADE
 set -euo pipefail
+
+# --- Non-interactivité : ceinture ET bretelles ------------------------------
+# Un provisionneur Vagrant n'a PAS de terminal. La moindre question debconf ne
+# s'affiche donc nulle part : elle bloque `vagrant up` jusqu'au timeout, sans le
+# moindre indice de ce qui est attendu. Les trois réglages ne font pas doublon :
+#   DEBIAN_FRONTEND=noninteractive  debconf ne pose plus de question et prend le défaut
+#   DEBIAN_PRIORITY=critical        même les questions « haute priorité » sont sautées
+#   NEEDRESTART_MODE=a              needrestart redémarre les services sans demander
+#                                   (il est tiré par plusieurs paquets sur Debian 13 et
+#                                   sa liste de services à redémarrer est un prompt)
 export DEBIAN_FRONTEND=noninteractive
+export DEBIAN_PRIORITY=critical
+export NEEDRESTART_MODE=a
+export NEEDRESTART_SUSPEND=1
 
 NODE_NAME="${NODE_NAME:-$(hostname)}"
 NODE_ROLE="${NODE_ROLE:-worker}"
@@ -35,11 +54,12 @@ K8S_APT_MINOR="${K8S_APT_MINOR:-v1.36}"
 CONTAINERD_SOURCE="${CONTAINERD_SOURCE:-docker}"
 REGISTRY_MIRROR="${REGISTRY_MIRROR:-}"
 HOSTS_ENTRIES="${HOSTS_ENTRIES:-}"
+SYSTEM_UPGRADE="${SYSTEM_UPGRADE:-true}"
 
 log() { printf '\n\033[1;36m[%s] ==> %s\033[0m\n' "$NODE_NAME" "$*"; }
 
 # ============================================================================
-log "[1/7] Résolution des noms (/etc/hosts)"
+log "[1/8] Résolution des noms (/etc/hosts)"
 # Bloc délimité et réécrit à chaque passage : relancer `vagrant provision` ne doit
 # pas empiler dix fois les mêmes lignes.
 if [ -n "$HOSTS_ENTRIES" ]; then
@@ -57,7 +77,74 @@ fi
 sed -i "/^127\.0\.1\.1\s\+${NODE_NAME}\b/d" /etc/hosts
 
 # ============================================================================
-log "[2/7] Prérequis noyau (swap, modules, sysctl)"
+if [ "$SYSTEM_UPGRADE" = "true" ]; then
+log "[2/8] Mise à jour du système (non interactive, GRUB préconfiguré)"
+
+# --- LE PIÈGE : grub-pc et sa question debconf --------------------------------
+# `apt-get upgrade` sur une box Debian met tôt ou tard `grub-pc` à jour. Son postinst
+# pose alors une question debconf `grub-pc/install_devices` — « sur quel(s) disque(s)
+# installer GRUB ? » — parce que la réponse n'est pas déductible : GRUB doit être écrit
+# dans le MBR d'un disque physique, et le paquet ne peut pas le deviner.
+#
+# Dans un provisionneur Vagrant il n'y a AUCUN terminal : la question ne s'affiche nulle
+# part et `vagrant up` reste bloqué jusqu'au timeout. Pire, si elle est sautée sans
+# réponse, GRUB n'est pas réécrit dans le MBR et la VM peut ne plus démarrer au reboot
+# suivant — panne qui se manifeste bien après le provisioning, donc très loin de sa cause.
+#
+# On préconfigure donc la réponse AVANT toute mise à jour. C'est `debconf-set-selections`
+# qui pose la réponse dans la base debconf ; le postinst la lira au lieu de demander.
+
+# Le disque n'est pas codé en dur : on remonte du système de fichiers racine vers le
+# disque parent. `/dev/sda` est le cas VirtualBox habituel, mais ce n'est qu'un repli —
+# un provider différent (libvirt -> /dev/vda) ou un ordre de contrôleurs inattendu
+# donnerait un autre nom, et une valeur fausse ici est exactement ce qu'on veut éviter.
+root_src="$(findmnt -no SOURCE / 2>/dev/null || true)"
+boot_disk=""
+if [ -n "$root_src" ]; then
+  parent="$(lsblk -no PKNAME "$root_src" 2>/dev/null | head -n1 | tr -d '[:space:]' || true)"
+  [ -n "$parent" ] && boot_disk="/dev/${parent}"
+fi
+boot_disk="${boot_disk:-/dev/sda}"
+
+if [ -d /sys/firmware/efi ]; then
+  # En UEFI c'est `grub-efi` qui est installé : il écrit dans la partition ESP et ne
+  # pose jamais `install_devices`. On préconfigure quand même — sans effet ici, mais
+  # correct si la box bascule un jour en BIOS.
+  echo "    démarrage UEFI détecté (grub-efi) — pas de question install_devices"
+else
+  echo "    démarrage BIOS — GRUB sera installé sur ${boot_disk}"
+fi
+
+debconf-set-selections <<EOF
+grub-pc grub-pc/install_devices multiselect ${boot_disk}
+grub-pc grub-pc/install_devices_disks_changed multiselect ${boot_disk}
+grub-pc grub-pc/install_devices_empty boolean false
+grub-pc grub-pc/postrm_purge_boot_grub boolean false
+EOF
+
+apt-get update -qq
+
+# `upgrade` et surtout PAS `full-upgrade`/`dist-upgrade` : `upgrade` ne peut pas
+# installer un paquet au nom nouveau, donc il laisse volontairement de côté les
+# montées de noyau (linux-image-6.12.x est un NOUVEAU nom de paquet). C'est exactement
+# ce qu'on veut : on met le système à jour sans changer le noyau sous les pieds des
+# modules chargés à l'étape suivante (br_netfilter, iscsi_tcp), et sans imposer un reboot.
+#
+# --force-confdef + --force-confold : garder les fichiers de configuration en place
+# sans poser la question « garder la version installée ou celle du mainteneur ? ».
+apt-get -y \
+  -o Dpkg::Options::="--force-confdef" \
+  -o Dpkg::Options::="--force-confold" \
+  upgrade
+
+apt-get -y -qq autoremove
+else
+log "[2/8] Mise à jour du système — ignorée (SYSTEM_UPGRADE=${SYSTEM_UPGRADE})"
+apt-get update -qq
+fi
+
+# ============================================================================
+log "[3/8] Prérequis noyau (swap, modules, sysctl)"
 
 # --- swap ---
 # NodeSwap est GA depuis 1.34, mais `failSwapOn` vaut TOUJOURS true par défaut :
@@ -105,8 +192,9 @@ EOF
 sysctl --system >/dev/null
 
 # ============================================================================
-log "[3/7] Paquets de base"
-apt-get update -qq
+log "[4/8] Paquets de base"
+# Pas de `apt-get update` ici : l'étape 2 vient de le faire, dans les deux branches
+# (avec ou sans mise à jour du système). Le refaire ne coûterait que du temps de boot.
 # conntrack + socat + ethtool : exigés par le preflight kubeadm et par kube-proxy.
 # open-iscsi + nfs-common : prérequis Longhorn (_k8s/longhorn/).
 # Sur Talos ces deux-là passaient par une extension système cuite dans l'image ;
@@ -128,7 +216,7 @@ fi
 systemctl enable --now iscsid >/dev/null 2>&1 || true
 
 # ============================================================================
-log "[4/7] containerd (source : ${CONTAINERD_SOURCE})"
+log "[5/8] containerd (source : ${CONTAINERD_SOURCE})"
 case "$CONTAINERD_SOURCE" in
   docker)
     # containerd 2.x. Seule la branche 2.x implémente la méthode CRI `RuntimeConfig`
@@ -156,7 +244,7 @@ https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_C
 esac
 
 # ============================================================================
-log "[5/7] kubelet / kubeadm / kubectl ${K8S_VERSION} (dépôt ${K8S_APT_MINOR})"
+log "[6/8] kubelet / kubeadm / kubectl ${K8S_VERSION} (dépôt ${K8S_APT_MINOR})"
 # kubernetes.io ne publie que la forme `.list` classique (pas de deb822) : c'est
 # celle qui est testée en amont, on ne s'en écarte pas.
 if [ ! -f /etc/apt/keyrings/kubernetes-apt-keyring.gpg ]; then
@@ -244,7 +332,7 @@ timeout: 10
 EOF
 
 # ============================================================================
-log "[6/7] Pré-tirage des images"
+log "[7/8] Pré-tirage des images"
 # Fait ici, PENDANT `vagrant up`, donc en parallèle sur toutes les VM. `kubeadm init`
 # n'a alors plus rien à télécharger, ce qui retire la plus grosse source de timeouts
 # du bootstrap (et rend le lab reconstructible hors-ligne).
@@ -286,7 +374,7 @@ EOF
 
 # ============================================================================
 if [ "$NODE_ROLE" = "controlplane" ]; then
-log "[7/7] keepalived — VIP ${VIP} sur ${HOSTONLY_IF} (VRRP)"
+log "[8/8] keepalived — VIP ${VIP} sur ${HOSTONLY_IF} (VRRP)"
 
 # POURQUOI keepalived plutôt que kube-vip.
 #   La VIP doit exister AVANT `kubeadm init`, puisque `controlPlaneEndpoint` pointe
@@ -365,7 +453,7 @@ EOF
 systemctl enable keepalived >/dev/null 2>&1 || true
 systemctl restart keepalived
 else
-log "[7/7] keepalived — ignoré (node de rôle '${NODE_ROLE}')"
+log "[8/8] keepalived — ignoré (node de rôle '${NODE_ROLE}')"
 fi
 
 # ============================================================================
