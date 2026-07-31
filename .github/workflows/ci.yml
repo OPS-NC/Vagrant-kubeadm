@@ -1,0 +1,135 @@
+# Validation du dépôt à chaque PR — SANS jamais monter de cluster.
+#
+# Les jobs appellent les mêmes cibles `make` que celles documentées pour l'usage local
+# (`make validate`) : la définition d'un test vit dans le Makefile, jamais en double
+# ici. Un test qui passe en CI et échoue sur le poste (ou l'inverse) est un test cassé.
+#
+# Ce qui n'est PAS ici, et pourquoi :
+#   - `make validate-docs` : déjà couvert par le workflow `docs`.
+name: ci
+
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+# Lecture seule : rien ici ne publie quoi que ce soit.
+permissions:
+  contents: read
+
+# Une PR poussée trois fois de suite n'a pas besoin de trois validations : on annule
+# les exécutions périmées de la même branche.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shell:
+    name: Syntaxe des scripts shell
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # `bash -n` sur tous les *.sh suivis par git (cf. Makefile). Rien à installer :
+      # bash est là, et la liste vient de `git ls-files`, donc le checkout suffit.
+      - name: make validate-shell
+        run: make validate-shell
+
+  yaml:
+    name: Syntaxe des YAML
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Même épinglage que le workflow `docs` : setup-uv n'a pas de tag majeur flottant
+      # au-delà de v7, un `@v9` n'existe pas et ferait échouer le job.
+      - name: Installer uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+
+      # uv fournit PyYAML à la volée (cf. YAML_PY dans le Makefile) : rien à installer
+      # au niveau système, et la même commande tourne en local.
+      - name: make validate-yaml
+        run: make validate-yaml
+
+  kubeadm:
+    name: Modèles kubeadm (schéma v1beta4)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Installer uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+
+      # C'est LE job qui a le plus de valeur : il installe le vrai binaire kubeadm et
+      # fait valider les modèles par lui. Sans ça, une erreur de schéma v1beta4 (le
+      # piège `extraArgs` dictionnaire → liste) ne se découvre qu'au `kubeadm init`,
+      # c'est-à-dire après dix minutes de `vagrant up`.
+      - name: Installer kubeadm
+        run: |
+          K8S_APT_MINOR="$(sed -n 's/^K8S_APT_MINOR=//p' lab.env.example | head -n1)"
+          K8S_VERSION="$(sed -n 's/^K8S_VERSION=//p' lab.env.example | head -n1)"
+          echo "Dépôt ${K8S_APT_MINOR}, version ${K8S_VERSION}"
+          sudo mkdir -p -m 755 /etc/apt/keyrings
+          curl -fsSL "https://pkgs.k8s.io/core:/stable:/${K8S_APT_MINOR}/deb/Release.key" \
+            | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+          echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] \
+          https://pkgs.k8s.io/core:/stable:/${K8S_APT_MINOR}/deb/ /" \
+            | sudo tee /etc/apt/sources.list.d/kubernetes.list >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq "kubeadm=${K8S_VERSION}-*"
+          kubeadm version
+
+      - name: make validate-kubeadm
+        run: make validate-kubeadm
+
+  vagrant:
+    name: Vagrantfile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Vagrant n'est plus fourni par les images ubuntu-24.04 des runners : on
+      # l'installe depuis le dépôt APT HashiCorp, et seulement s'il manque (au cas où
+      # une future image le remettrait).
+      - name: Installer Vagrant
+        run: |
+          if command -v vagrant >/dev/null 2>&1; then
+            echo "Vagrant déjà présent : $(vagrant --version)"
+            exit 0
+          fi
+          wget -qO- https://apt.releases.hashicorp.com/gpg \
+            | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] \
+          https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
+            | sudo tee /etc/apt/sources.list.d/hashicorp.list >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq vagrant
+          vagrant --version
+
+      # --ignore-provider : le runner n'a pas VirtualBox, et sans ce drapeau la
+      # validation échoue sur le provider avant même de lire le Vagrantfile. En local
+      # le drapeau est omis, ce qui valide EN PLUS la config provider.
+      - name: make validate-vagrant
+        run: make validate-vagrant VAGRANT_VALIDATE_FLAGS=--ignore-provider
+        env:
+          # Pas de télémétrie ni de check de version depuis un runner jetable.
+          VAGRANT_NO_COLOR: "1"
+          CHECKPOINT_DISABLE: "1"
+
+      # Garde-fou de topologie : le Vagrantfile doit refuser un nombre PAIR de control
+      # planes (etcd n'y tient aucun quorum utile). Un test qui vérifie qu'une erreur
+      # SE PRODUIT bien vaut mieux qu'un commentaire qui l'affirme.
+      - name: Le Vagrantfile refuse CONTROL_PLANES pair
+        run: |
+          if CONTROL_PLANES=2 vagrant validate --ignore-provider 2>&1 | grep -q 'PAIR'; then
+            echo "✅ garde-fou etcd : CONTROL_PLANES=2 bien refusé"
+          else
+            echo "::error::le Vagrantfile a accepté CONTROL_PLANES=2" && exit 1
+          fi
+        env:
+          VAGRANT_NO_COLOR: "1"
+          CHECKPOINT_DISABLE: "1"

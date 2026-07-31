@@ -43,7 +43,8 @@ fi
 # ============================================================================
 log "kubeconfig pour root et pour l'utilisateur vagrant"
 install -o root -g root -m 0600 -D /etc/kubernetes/admin.conf /root/.kube/config
-install -o vagrant -g vagrant -m 0600 -D /etc/kubernetes/admin.conf /home/vagrant/.kube/config
+install -d -o vagrant -g vagrant -m 0700 /home/vagrant/.kube
+install -o vagrant -g vagrant -m 0600 /etc/kubernetes/admin.conf /home/vagrant/.kube/config
 
 # ============================================================================
 log "Éléments de jonction (token, empreinte CA, clé de certificats)"

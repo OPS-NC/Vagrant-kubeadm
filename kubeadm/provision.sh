@@ -67,7 +67,9 @@ swapoff -a
 sed -ri 's/^\s*([^#].*\s+swap\s+)/#\1/' /etc/fstab
 # Debian 13 peut fournir le swap par une unité systemd (zram, swapfile) que
 # /etc/fstab ne décrit pas : la masquer évite qu'il revienne au reboot.
-systemctl list-unit-files --type=swap --no-legend 2>/dev/null \
+# `|| true` sur TOUT le pipeline : sans unité de swap, systemctl sort en 1 et,
+# sous `set -e` + `pipefail`, tuerait la préparation du node dès l'étape 2.
+{ systemctl list-unit-files --type=swap --no-legend 2>/dev/null || true; } \
   | awk '{print $1}' | while read -r unit; do
       [ -n "$unit" ] && systemctl mask "$unit" >/dev/null 2>&1 || true
     done
@@ -112,9 +114,15 @@ apt-get update -qq
 apt-get install -y -qq \
   apt-transport-https ca-certificates curl gnupg gpg \
   conntrack socat ethtool iptables jq \
-  open-iscsi nfs-common \
-  keepalived
+  open-iscsi nfs-common
 install -m 0755 -d /etc/apt/keyrings
+
+# keepalived UNIQUEMENT sur les control planes : le paquet Debian active son unité à
+# l'installation, et sur un worker — qui n'aura jamais de keepalived.conf — elle
+# échouerait en boucle, polluant les journaux pour rien.
+if [ "$NODE_ROLE" = "controlplane" ]; then
+  apt-get install -y -qq keepalived
+fi
 
 # iscsid doit tourner ET démarrer au boot pour Longhorn.
 systemctl enable --now iscsid >/dev/null 2>&1 || true
