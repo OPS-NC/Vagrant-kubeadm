@@ -347,7 +347,12 @@ def _rendre_fence(self, tokens: list[Token], idx: int, options, env) -> str:
     active, sinon basculer FR/EN laisserait des « Copier » dans la page anglaise.
     """
     jeton = tokens[idx]
-    langage = (jeton.info or "").strip().split()[0].lower() if jeton.info else ""
+    # `jeton.info` vaut " " (et non "") quand la clôture du bloc porte une espace en
+    # fin de ligne — une chaîne d'espaces est TRUTHY, donc l'ancien test `if jeton.info`
+    # passait, et `"".split()[0]` levait une IndexError qui tuait toute la génération.
+    # On découpe d'abord, on indexe ensuite : plus de branche à faire mentir.
+    morceaux = (jeton.info or "").strip().split()
+    langage = morceaux[0].lower() if morceaux else ""
     try:
         corps = highlight(jeton.content, get_lexer_by_name(langage or "text"),
                           HtmlFormatter(nowrap=True))
