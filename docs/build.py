@@ -100,6 +100,9 @@ LIBELLES: dict[str, dict[str, str]] = {
         "echec":           "Failed",
         "vers_clair":      "Switch to light theme",
         "vers_sombre":     "Switch to dark theme",
+        "theme_aria":      "Documentation theme",
+        "theme_clair":     "Light",
+        "theme_sombre":    "Dark",
         "menu":            "Open the menu",
         "langue_aria":     "Documentation language",
         "source":          "Source:",
@@ -120,6 +123,9 @@ LIBELLES: dict[str, dict[str, str]] = {
         "echec":           "Échec",
         "vers_clair":      "Passer en clair",
         "vers_sombre":     "Passer en sombre",
+        "theme_aria":      "Thème de la documentation",
+        "theme_clair":     "Clair",
+        "theme_sombre":    "Sombre",
         "menu":            "Ouvrir le menu",
         "langue_aria":     "Langue de la documentation",
         "source":          "Source :",
@@ -655,6 +661,13 @@ a:hover{text-decoration:underline;text-underline-offset:3px}
   background:var(--fond);color:var(--texte-2);font:650 .74rem/1.45 var(--sans);
   letter-spacing:.05em;cursor:pointer;transition:color .12s,border-color .12s}
 .langues button:hover{color:var(--accent);border-color:var(--accent)}
+/* Sélecteur de thème : même gabarit que .langues, juste en dessous. */
+.themes{display:flex;gap:.3rem;padding:0 1.1rem .9rem}
+.themes button{flex:1;padding:.32rem 0;border:1px solid var(--bord-fort);border-radius:7px;
+  background:var(--fond);color:var(--texte-2);font-size:.78rem;cursor:pointer}
+.themes button:hover{color:var(--accent);border-color:var(--accent)}
+.themes button[aria-pressed="true"]{background:var(--accent-doux);color:var(--accent);
+  border-color:var(--accent)}
 .langues button[aria-pressed="true"]{background:var(--accent-doux);color:var(--accent);
   border-color:var(--accent)}
 
@@ -788,7 +801,7 @@ details > :not(summary):last-child{margin-bottom:1.05rem}
 }
 @media print{
   .menu,.sommaire,.barre,.copier,.theme-flottant,.header-anchor,.voile,
-  .langues{display:none!important}
+  .langues,.themes{display:none!important}
   .enveloppe{grid-template-columns:minmax(0,1fr)}
   .page{display:block!important;page-break-after:always}
   .bloc-code,.table-scroll{box-shadow:none}
@@ -941,7 +954,20 @@ JS = r"""
       b.title = sombre ? m.vers_clair : m.vers_sombre;
       b.setAttribute('aria-label', b.title);
     });
+    /* Groupe segmenté de la barre latérale : état + libellés (qui suivent la langue). */
+    document.querySelectorAll('.themes button').forEach(b => {
+      const actif = b.dataset.themeSet === (sombre ? 'dark' : 'light');
+      b.setAttribute('aria-pressed', String(actif));
+      b.textContent = (b.dataset.themeSet === 'dark' ? '☾ ' : '☀ ')
+                    + (b.dataset.themeSet === 'dark' ? m.theme_sombre : m.theme_clair);
+    });
+    document.querySelectorAll('.themes').forEach(g => g.setAttribute('aria-label', m.theme_aria));
   }
+  document.querySelectorAll('.themes button').forEach(b => b.addEventListener('click', () => {
+    document.documentElement.dataset.theme = b.dataset.themeSet;
+    localStorage.setItem(CLE, b.dataset.themeSet);
+    majTheme();
+  }));
   document.querySelectorAll('[data-theme-toggle]').forEach(b => b.addEventListener('click', () => {
     const suivant = (document.documentElement.dataset.theme || 'dark') === 'dark' ? 'light' : 'dark';
     document.documentElement.dataset.theme = suivant;
@@ -978,6 +1004,27 @@ def selecteur_langue(mots: dict[str, str]) -> str:
     )
     return (f'<div class="langues" role="group" '
             f'aria-label="{html.escape(mots["langue_aria"], quote=True)}">{boutons}</div>')
+
+
+def selecteur_theme(mots: dict[str, str]) -> str:
+    """Sélecteur clair/sombre EXPLICITE, posé dans la barre latérale.
+
+    Il existait déjà deux bascules `data-theme-toggle` : une dans la barre mobile,
+    une flottante en bas à droite. Mais la barre mobile est `display:none` sur poste
+    fixe, si bien que le seul contrôle visible en desktop était une pastille ☀ sans
+    libellé, dans un coin, par-dessus le contenu — invisible en pratique.
+
+    On ajoute donc un groupe segmenté « Clair / Sombre » calqué sur le sélecteur de
+    langue, au même endroit et avec la même forme : c'est là que l'œil le cherche.
+    Les deux bascules d'origine restent en place et partagent l'état.
+    """
+    boutons = "".join(
+        f'<button type="button" data-theme-set="{valeur}" aria-pressed="false">'
+        f'{icone} {html.escape(mots[cle])}</button>'
+        for valeur, icone, cle in (("light", "☀", "theme_clair"), ("dark", "☾", "theme_sombre"))
+    )
+    return (f'<div class="themes" role="group" '
+            f'aria-label="{html.escape(mots["theme_aria"], quote=True)}">{boutons}</div>')
 
 
 # Marque officielle GitHub (viewBox 16x16, tracé unique). Inline car la page doit
@@ -1144,6 +1191,7 @@ def construire(rendus: list[dict], version: str, alertes: list[str]) -> str:
       {lien_depot(mots)}
     </div>
     {selecteur_langue(mots)}
+    {selecteur_theme(mots)}
     <div class="recherche">
       <input type="search" placeholder="{html.escape(mots['recherche'], quote=True)}"
              aria-label="{html.escape(mots['recherche_aria'], quote=True)}">
