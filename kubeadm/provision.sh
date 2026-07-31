@@ -240,7 +240,7 @@ case "$CONTAINERD_SOURCE" in
     # branche 1.7 de Debian est une impasse (containerd#11346 fermé sans merge).
     if [ ! -f /etc/apt/keyrings/docker.gpg ]; then
       curl -fsSL https://download.docker.com/linux/debian/gpg \
-        | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+        | gpg --batch --yes --dearmor -o /etc/apt/keyrings/docker.gpg
       chmod a+r /etc/apt/keyrings/docker.gpg
     fi
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
@@ -264,7 +264,7 @@ log "[6/8] kubelet / kubeadm / kubectl ${K8S_VERSION} (dépôt ${K8S_APT_MINOR})
 # celle qui est testée en amont, on ne s'en écarte pas.
 if [ ! -f /etc/apt/keyrings/kubernetes-apt-keyring.gpg ]; then
   curl -fsSL "https://pkgs.k8s.io/core:/stable:/${K8S_APT_MINOR}/deb/Release.key" \
-    | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+    | gpg --batch --yes --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
   chmod a+r /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 fi
 echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] \

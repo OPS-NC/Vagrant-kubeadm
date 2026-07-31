@@ -80,8 +80,10 @@ jobs:
           K8S_VERSION="$(sed -n 's/^K8S_VERSION=//p' lab.env.example | head -n1)"
           echo "Dépôt ${K8S_APT_MINOR}, version ${K8S_VERSION}"
           sudo mkdir -p -m 755 /etc/apt/keyrings
+          # `--batch --yes` : sans tty, gpg tente d'ouvrir /dev/tty pour demander
+          # confirmation d'écrasement et meurt sur « cannot open '/dev/tty' ».
           curl -fsSL "https://pkgs.k8s.io/core:/stable:/${K8S_APT_MINOR}/deb/Release.key" \
-            | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+            | sudo gpg --batch --yes --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
           echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] \
           https://pkgs.k8s.io/core:/stable:/${K8S_APT_MINOR}/deb/ /" \
             | sudo tee /etc/apt/sources.list.d/kubernetes.list >/dev/null
@@ -108,7 +110,7 @@ jobs:
             exit 0
           fi
           wget -qO- https://apt.releases.hashicorp.com/gpg \
-            | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+            | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
           echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] \
           https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
             | sudo tee /etc/apt/sources.list.d/hashicorp.list >/dev/null
