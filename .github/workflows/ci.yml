@@ -35,6 +35,12 @@ jobs:
       - name: make validate-shell
         run: make validate-shell
 
+      # lab.env est la source unique, mais ses valeurs sont dupliquées comme filet de
+      # sécurité dans le Vagrantfile et dans cluster-up.sh. Deux défauts divergents
+      # donnent un lab incohérent, et rien ne le signalerait avant le `vagrant up`.
+      - name: make validate-defaults
+        run: make validate-defaults
+
   yaml:
     name: Syntaxe des YAML
     runs-on: ubuntu-latest

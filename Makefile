@@ -21,7 +21,7 @@ YAML_PY := uv run --quiet --with pyyaml --no-project python
 VAGRANT_VALIDATE_FLAGS ?=
 
 .PHONY: help docs docs-open validate validate-shell validate-yaml validate-vagrant \
-        validate-kubeadm validate-docs clean
+        validate-kubeadm validate-defaults validate-docs clean
 
 help: ## Affiche cette aide
 	@grep -hE '^[a-z-]+:.*?##' $(MAKEFILE_LIST) \
@@ -33,8 +33,28 @@ docs: ## Régénère docs/index.html depuis tous les README (EN + miroirs FR)
 docs-open: docs ## Régénère puis ouvre la doc dans le navigateur
 	@xdg-open $(DOCS_OUT) >/dev/null 2>&1 || open $(DOCS_OUT)
 
-validate: validate-shell validate-yaml validate-vagrant validate-kubeadm validate-docs ## Tout valider (sans cluster)
+validate: validate-shell validate-yaml validate-vagrant validate-kubeadm validate-defaults validate-docs ## Tout valider (sans cluster)
 	@echo "✅ Validation complète OK"
+
+# lab.env est la SOURCE UNIQUE, mais ses valeurs sont dupliquées comme FILET DE SÉCURITÉ
+# dans le Vagrantfile et dans kubeadm/cluster-up.sh (pour que le lab démarre sans lab.env).
+# C'est la fragilité assumée du dépôt : deux défauts qui divergent donnent un lab
+# incohérent — des paquets 1.36 avec une config générée pour 1.35, ou pire, un Vagrantfile
+# qui crée 3 VM quand cluster-up.sh n'en joint qu'une. Ce test rend la divergence
+# impossible à committer sans s'en apercevoir.
+validate-defaults: ## Vérifie que les défauts sont identiques dans lab.env.example, le Vagrantfile et cluster-up.sh
+	@fail=0; \
+	for k in K8S_VERSION CONTROL_PLANES WORKERS CP_MEM CP_CPU WK_MEM WK_CPU \
+	         NETWORK CP_IP_START CP_IP_STEP WK_IP_START WK_IP_STEP; do \
+	  ref="$$(sed -n "s/^$$k=//p" lab.env.example | head -n1)"; \
+	  vf="$$(sed -n "s/.*ENV\[\"$$k\"\][^|]*|| \([^)]*\)).*/\1/p" Vagrantfile | head -n1 | tr -d '\" ')"; \
+	  cu="$$(sed -n "s/^$$k=\"\$${$$k:-\([^}]*\)}\".*/\1/p" kubeadm/cluster-up.sh | head -n1)"; \
+	  if [ -n "$$vf" ] && [ "$$vf" != "$$ref" ]; then \
+	    echo "❌ $$k : lab.env.example=$$ref mais Vagrantfile=$$vf"; fail=1; fi; \
+	  if [ -n "$$cu" ] && [ "$$cu" != "$$ref" ]; then \
+	    echo "❌ $$k : lab.env.example=$$ref mais cluster-up.sh=$$cu"; fail=1; fi; \
+	done; \
+	[ $$fail -eq 0 ] && echo "✅ défauts : lab.env.example / Vagrantfile / cluster-up.sh alignés"
 
 validate-docs: ## Construit la doc dans un fichier jetable et exige des liens valides
 	@out="$$(mktemp -d)"; trap 'rm -rf "$$out"' EXIT; \

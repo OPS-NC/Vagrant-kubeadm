@@ -56,6 +56,17 @@ etcd:
     # pour un lab. Il est très sensible à la latence de fsync — d'où l'intérêt de
     # garder les disques des VM sur un SSD (cf. TROUBLESHOOTING.md).
     dataDir: /var/lib/etcd
+    extraArgs:
+      # kubeadm n'expose les métriques d'etcd qu'en loopback
+      # (`--listen-metrics-urls=http://127.0.0.1:2381`), parce que cet endpoint ne
+      # sert par défaut qu'à la sonde de liveness du pod statique. Prometheus, lui,
+      # scrute depuis un pod : il ne peut pas atteindre le loopback du node, et la
+      # cible `kubeEtcd` de kube-prometheus-stack reste DOWN sans explication.
+      # `0.0.0.0` couvre aussi `127.0.0.1`, donc la sonde continue de fonctionner.
+      # Acceptable ici parce que le réseau host-only est isolé — ce port ne demande
+      # AUCUNE authentification et ne doit jamais être exposé sur un vrai réseau.
+      - name: listen-metrics-urls
+        value: "http://0.0.0.0:2381"
 
 apiServer:
   certSANs:
