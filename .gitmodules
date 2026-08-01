@@ -1,3 +1,4 @@
 [submodule "_k8s"]
 	path = _k8s
 	url = https://github.com/OPS-NC/k8s-playground.git
+	branch = main

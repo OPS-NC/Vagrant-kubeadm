@@ -35,7 +35,7 @@ place to maintain it. Its documentation is published separately at
   <https://ops-nc.github.io/k8s-playground/>, or at the file on GitHub
   (`https://github.com/OPS-NC/k8s-playground/blob/main/<dir>/README.md` — the directories sit at
   the **root** of that repo, with no `_k8s/` prefix).
-- Paths on disk (`./_k8s/install.sh`, `_k8s/cilium/cilium-up.sh`) stay correct and must not be
+- Paths on disk (`./_k8s/platform-up.sh`, `_k8s/cilium/cilium-up.sh`) stay correct and must not be
   rewritten: the submodule really does mount there.
 - If `_k8s/` is empty on the machine you work on, the submodule was never initialised:
   `git submodule update --init --recursive`. `git pull` alone does **not** update it.
@@ -55,22 +55,20 @@ lab.env  ──────────────► Vagrantfile ──► kub
    │                          ├─ vagrant ssh others → kubeadm/node-join.sh (kubeadm join)
    │                          └─ writes ./kubeconfig and _out/cluster.env
    │
-   └──────────────────► _k8s/install.sh kubeadm platform              (on the HOST, SUBMODULE)
+   └──────────────────► _k8s/platform-up.sh                           (on the HOST, SUBMODULE)
                               ├─ [1/4] CNI  → _k8s/cilium/cilium-up.sh (or calico/flannel/none)
                               ├─ [2/4] Envoy Gateway + main-gateway
                               ├─ [3/4] metrics-server
                               └─ [4/4] wildcard TLS → _k8s/self-signed/ or cert-manager
-                                    then opt-in addons: ./_k8s/install.sh kubeadm <addon>…
+                                    then opt-in addons: ./_k8s/install.sh <addon>…
 ```
 
-The application-layer entry point takes the **distribution as its first positional argument**
-(`kubeadm` here, `talos` in the sibling lab), and it needs **`LAB_DIR`** exported to find
-`lab.env` and `_out/` — see the pitfall section below. The full sequence from the host:
+The application-layer entry point takes **no distribution and no environment**: it locates the
+lab (the directory that contains `_k8s/` and carries the `Vagrantfile`) and reads the
+distribution off it — see the section below. The full sequence from the host:
 
 ```bash
-export KUBECONFIG="$PWD/kubeconfig"
-export LAB_DIR="$PWD"
-./_k8s/install.sh kubeadm platform
+./_k8s/platform-up.sh
 ```
 
 Undo without destroying the VMs: `kubeadm/cluster-reset.sh` → `kubeadm/node-reset.sh` in every
@@ -87,7 +85,7 @@ VM (workers first, so they deregister while the API still answers).
 | `kubeadm/node-init.sh` / `node-join.sh` | the actual `kubeadm init` / `kubeadm join`, in-VM. Both refuse to act on an already-initialised/joined node. |
 | `kubeadm/cluster-reset.sh` / `node-reset.sh` | undo the cluster, keep the VMs. |
 | `kubeadm/templates/*.yaml.tpl` | `InitConfiguration` / `JoinConfiguration` (v1beta4), `@MARKER@` substitution. |
-| `_k8s/` | **git submodule** → [k8s-playground](https://github.com/OPS-NC/k8s-playground), the application layer shared with the Talos lab. Entry point `install.sh <distro> …`; `platform` is the base, every other directory is an opt-in addon. **Read-only from here** — its code, its docs and its issues live in that repo. |
+| `_k8s/` | **git submodule** → [k8s-playground](https://github.com/OPS-NC/k8s-playground), the application layer shared with the Talos lab. Entry points `platform-up.sh` (the base) and `install.sh <addon>…`; every other directory is an opt-in addon. **Read-only from here** — its code, its docs and its issues live in that repo. |
 | `.gitmodules` | declares that submodule (path `_k8s`, url `…/k8s-playground.git`). Changing the pointer = `git add _k8s`, a normal commit of this repo. |
 | `docs/build.py` | generates the single-page bilingual `docs/index.html`. |
 | `Makefile` | `make validate`, `make docs`. Nothing here ever touches a running cluster. |
@@ -138,7 +136,7 @@ deliberately copied into several files:
 The k8s-playground `*-up.sh` scripts add one more layer, and the order matters:
 **`_out/cluster.env` (facts about the running cluster) wins over `lab.env` (a mere intent,
 possibly edited after the bootstrap)**. `cilium/cilium-up.sh` implements this in `lire_param`.
-Both files are found through `LAB_DIR` — see the pitfall below.
+Both files are found in the lab directory, resolved automatically — see the section below.
 
 ## ✅ Validating a change WITHOUT a cluster (do this every time)
 
@@ -241,19 +239,17 @@ resolve. Run it after renaming any heading.
 
 ### The `_k8s/` submodule
 
-- **`LAB_DIR` must be exported before any `_k8s/` script.** k8s-playground resolves `lab.env`
-  and `_out/` in this order: `$LAB_DIR` / `$LAB_ENV` → its own repo root →
-  `<its root>/../Vagrant-KubeADM`. That last candidate assumes the two repos are **siblings**;
-  mounted as a submodule its root *is* `Vagrant-KubeADM/_k8s`, so the path becomes
-  `Vagrant-KubeADM/Vagrant-KubeADM`, which does not exist, and resolution falls back on `_k8s/`
-  itself — no `lab.env`, no `_out/`, so built-in defaults (wrong domain, wrong CNI) and no
-  kubeconfig. Every doc example that runs the application layer must show
-  `export LAB_DIR="$PWD"` next to `export KUBECONFIG="$PWD/kubeconfig"`. Do not "simplify" it
-  away.
-- **The distribution is an argument, not a guess.** `./_k8s/install.sh kubeadm platform`,
-  `./_k8s/longhorn/longhorn-up.sh kubeadm`. Resolution order: first positional argument →
-  `--distro=` → `K8S_DISTRO` → `DISTRO=` in `lab.env`. A bare `./_k8s/platform-up.sh` with none
-  of those is not the documented invocation.
+- **The lab is found on its own — no `LAB_DIR` in the examples.** k8s-playground takes the
+  directory that *contains* `_k8s/` as the lab, provided it carries a `Vagrantfile`; that is
+  where `lab.env`, `_out/` and `kubeconfig` live. In the submodule layout that is this repo, so
+  documented commands are bare: `./_k8s/platform-up.sh`. `LAB_DIR` (or `LAB_ENV`) stays
+  documented as an **escape hatch** for an unusual layout, never as a required step — do not
+  re-add it to the normal path.
+- **The distribution is detected, not passed.** A `kubeadm/cluster-up.sh` next to the
+  `Vagrantfile` identifies the kubeadm lab (`talos/cluster-up.sh` the Talos twin), from the
+  clone alone, before any `vagrant up`. An explicit `kubeadm` argument (or `--distro=` /
+  `K8S_DISTRO`) is still accepted and wins, but it is a possibility to mention, not the
+  documented invocation. There is no `DISTRO` key in `lab.env` any more.
 - **Do not edit anything under `_k8s/`** from this repo, and do not link to its `*.md` files.
   See the dedicated section at the top of this file.
 - **`make validate-shell` / `validate-yaml` only cover files tracked by *this* repo.** The

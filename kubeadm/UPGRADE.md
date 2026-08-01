@@ -108,8 +108,7 @@ upgrade at all.
 vagrant destroy -f
 vagrant up
 ./kubeadm/cluster-up.sh
-export KUBECONFIG="$PWD/kubeconfig" LAB_DIR="$PWD"
-./_k8s/install.sh kubeadm platform
+./_k8s/platform-up.sh
 ```
 
 You get a clean cluster on the target version, with no half-upgraded state, in roughly the time
@@ -381,13 +380,13 @@ end**: containerd 1.7 will never implement `RuntimeConfig` and cannot carry you 
 
 ```bash
 # lab.env: CILIUM_VERSION=1.2x.y
-export KUBECONFIG="$PWD/kubeconfig" LAB_DIR="$PWD"
-./_k8s/cilium/cilium-up.sh kubeadm
+./_k8s/cilium/cilium-up.sh
 ```
 
 Run it **from the repository root**: `_k8s/` is the [k8s-playground](https://github.com/OPS-NC/k8s-playground)
-submodule, it takes the distribution as its first argument, and it reads `lab.env` / `_out/`
-through `LAB_DIR` — without that export it would fall back on its own defaults.
+submodule, and it finds its bearings on its own — the lab is the directory that contains
+`_k8s/` and carries the `Vagrantfile`, which is where `lab.env`, `_out/` and `kubeconfig` are;
+the distribution is read off it. Set `LAB_DIR` only if you run it from outside that layout.
 
 The script is a `helm upgrade --install`, so it is the same command whether you are installing
 or upgrading. Read the Cilium upgrade notes first: a minor bump can require a one-off
