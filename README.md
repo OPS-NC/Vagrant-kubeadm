@@ -23,8 +23,7 @@ cd Vagrant-kubeadm
 cp lab.env.example lab.env      # pick the topology
 vagrant up                      # creates and PREPARES the VMs (no cluster yet)
 ./kubeadm/cluster-up.sh         # kubeadm init + join + kubeconfig
-export KUBECONFIG="$PWD/kubeconfig" LAB_DIR="$PWD"
-./_k8s/install.sh kubeadm platform   # CNI, Envoy Gateway, metrics-server, wildcard TLS
+./_k8s/platform-up.sh           # CNI, Envoy Gateway, metrics-server, wildcard TLS
 ```
 
 | | |
@@ -36,7 +35,7 @@ export KUBECONFIG="$PWD/kubeconfig" LAB_DIR="$PWD"
 
 > ⚠️ **`--recurse-submodules` is not optional.** `_k8s/` is a **git submodule** pointing at
 > [k8s-playground](https://github.com/OPS-NC/k8s-playground); a plain `git clone` leaves the
-> directory **empty** and `./_k8s/install.sh` returns `No such file or directory`. On a clone
+> directory **empty** and `./_k8s/platform-up.sh` returns `No such file or directory`. On a clone
 > already made: `git submodule update --init --recursive` (§1).
 
 > ℹ️ **There is a twin repo, [Vagrant-Talos](https://github.com/OPS-NC/Vagrant-Talos).** Same
@@ -253,7 +252,7 @@ the host-only network.
 > anyone discovering kubeadm: **kubeadm never installs a CNI**. Until a pod network is in
 > place, the kubelet reports `NetworkReady=false` / `cni plugin not initialized`, CoreDNS
 > stays `Pending`, and the nodes stay `NotReady`. The next command is what fixes it:
-> `./_k8s/install.sh kubeadm platform` (§6).
+> `./_k8s/platform-up.sh` (§6).
 
 > 💡 **`cluster-up.sh` is idempotent** and safe to re-run: `node-init.sh` refuses to re-run
 > `kubeadm init` if `/etc/kubernetes/admin.conf` exists, `node-join.sh` skips any node that
@@ -435,44 +434,45 @@ Prometheus/Loki, Kyverno, Trivy, MinIO, Argo CD… — comes from a **separate r
 submodule.
 
 That layer used to be duplicated in this repo and in the Talos twin. It is now maintained
-**once**, and the target distribution became an **argument** — which is why the entry point is
-`install.sh <distro> …` and no longer a bare `platform-up.sh`. Its documentation is published
+**once**, in a repo that mounts itself under `_k8s/` in either lab and **works out what it is
+looking at on its own** — nothing to declare, nothing to export. Its documentation is published
 on its own: **<https://ops-nc.github.io/k8s-playground/>**.
 
 ```bash
 ./kubeadm/cluster-up.sh                     # 1. the cluster (NotReady: no CNI yet)
 
-export KUBECONFIG="$PWD/kubeconfig"         # 2. where the cluster is
-export LAB_DIR="$PWD"                       #    where lab.env and _out/ are — see below
-
-./_k8s/install.sh kubeadm platform          # 3. CNI → Envoy Gateway → metrics-server → TLS
-./_k8s/install.sh kubeadm longhorn vault argocd   # 4. opt-in addons
+./_k8s/platform-up.sh                       # 2. CNI → Envoy Gateway → metrics-server → TLS
+./_k8s/install.sh longhorn vault argocd     # 3. opt-in addons
 ```
 
-Useful variants — the distribution (`kubeadm`) is always the **first positional argument**:
+Useful variants — no distribution to pass anywhere:
 
 | Command | What it does |
 |---|---|
-| `./_k8s/install.sh kubeadm list` | the full catalogue of addons |
-| `./_k8s/install.sh kubeadm all` | platform + every addon, in dependency order |
-| `./_k8s/longhorn/longhorn-up.sh kubeadm` | one addon on its own |
+| `./_k8s/install.sh list` | the full catalogue of addons |
+| `./_k8s/install.sh all` | platform + every addon, in dependency order |
+| `./_k8s/longhorn/longhorn-up.sh` | one addon on its own |
 
-The distribution is resolved in this order: **first positional argument** → `--distro=` →
-the `K8S_DISTRO` environment variable → `DISTRO=` in `lab.env`. Anything else and the scripts
-refuse to run, rather than apply a Talos-shaped manifest on Debian.
+**How it finds its bearings**, in two steps, both automatic:
 
-`install.sh kubeadm platform` installs the CNI first; the nodes go `Ready` within a minute or
-two of that step. Full dependency chain, addon list and per-addon pitfalls:
+- **The lab** is the directory that *contains* `_k8s/` — the one carrying the `Vagrantfile`,
+  and therefore `lab.env`, `_out/` and `kubeconfig`. That is exactly this repo.
+- **The distribution** is read off the lab's contents: a `kubeadm/cluster-up.sh` next to the
+  `Vagrantfile` means the kubeadm lab (a `talos/cluster-up.sh` means the Talos twin). It is
+  decided from the clone alone, before any `vagrant up`.
+
+An explicit argument (`./_k8s/install.sh kubeadm platform`, `--distro=kubeadm`, or the
+`K8S_DISTRO` environment variable) is still accepted and wins over detection — useful when you drive a
+cluster from somewhere else, needless here.
+
+`platform-up.sh` installs the CNI first; the nodes go `Ready` within a minute or two of that
+step. Full dependency chain, addon list and per-addon pitfalls:
 **<https://ops-nc.github.io/k8s-playground/>**.
 
-> ⚠️ **`export LAB_DIR="$PWD"` is mandatory in this layout — this is the trap.**
-> k8s-playground looks for `lab.env` and `_out/` in this order: `$LAB_DIR` / `$LAB_ENV`, then
-> its own repo root, then `<its root>/../Vagrant-KubeADM`. Mounted as a submodule its root
-> **is** `Vagrant-KubeADM/_k8s`, so that last path resolves to
-> `Vagrant-KubeADM/Vagrant-KubeADM`, which does not exist. Resolution then falls back on
-> `_k8s/` itself, where there is neither a `lab.env` nor an `_out/`: the scripts would run on
-> built-in defaults — **wrong domain, wrong CNI** — and with no kubeconfig. `LAB_DIR` is the
-> variable provided for exactly this case; export it next to `KUBECONFIG`, every time.
+> 💡 **`LAB_DIR` is the escape hatch, not a step.** Point it at the lab directory when the
+> layout is unusual — `_k8s/` checked out somewhere else, a lab driven from another path:
+> `LAB_DIR=/path/to/Vagrant-kubeadm ./_k8s/platform-up.sh`. `LAB_ENV` does the same for a
+> single `lab.env`. In the normal submodule layout neither is needed.
 
 > ⚠️ **If `_k8s/` is empty**, the submodule was never initialised:
 > `git submodule update --init --recursive` (§1). To pull a newer application layer:
@@ -592,9 +592,11 @@ Symptoms and fixes have their own page so this one stays about installing:
 **[`TROUBLESHOOTING.md`](TROUBLESHOOTING.md)**. The ones you are most likely to hit:
 
 - **All nodes `NotReady`, CoreDNS `Pending`** → no CNI yet. Expected until
-  `./_k8s/install.sh kubeadm platform` — kubeadm never installs one.
-- **`./_k8s/install.sh: No such file or directory`** → the `_k8s/` submodule was never
+  `./_k8s/platform-up.sh` — kubeadm never installs one.
+- **`./_k8s/platform-up.sh: No such file or directory`** → the `_k8s/` submodule was never
   initialised: `git submodule update --init --recursive`.
+- **The `_k8s/` scripts run on the wrong domain, or find no kubeconfig** → the lab was not
+  located; run them from a `_k8s/` that really sits inside the lab, or set `LAB_DIR`.
 - **`cluster-up.sh` stops on "the apiserver does not answer on the VIP"** → either keepalived
   is not carrying the VIP (`vagrant ssh k8s-cp1 -c "ip -4 addr show | grep 192.168.56.5"`,
   `sudo systemctl status keepalived`), or the apiserver itself is not starting
@@ -736,14 +738,14 @@ instead of in an escaping nightmare inside `vagrant ssh -c`.
 
 **kubeadm installs no CNI, ever.** Unlike the Talos twin repo — where flannel can be laid down
 by the OS at bootstrap — here the pod network is *always* installed afterwards, by
-`./_k8s/install.sh kubeadm platform`. `CNI` in `lab.env` is read by `cluster-up.sh` (for the
+`./_k8s/platform-up.sh`. `CNI` in `lab.env` is read by `cluster-up.sh` (for the
 kube-proxy decision and `_out/cluster.env`) and by the platform step (which chart to install).
 
 | `CNI=` | Who installs it | `LoadBalancer` IP | `_k8s/` layer usable |
 |---|---|---|---|
-| **`cilium`** *(default)* | `install.sh kubeadm platform` → [k8s-playground `cilium/`](https://github.com/OPS-NC/k8s-playground/blob/main/cilium/README.md) | ✅ pool + L2/ARP announcement | ✅ yes |
-| `calico` | `install.sh kubeadm platform` → [k8s-playground `calico/`](https://github.com/OPS-NC/k8s-playground/blob/main/calico/README.md) | ❌ BGP only | ⚠️ needs MetalLB on top |
-| `flannel` | `install.sh kubeadm platform` | ❌ | ❌ no |
+| **`cilium`** *(default)* | `platform-up.sh` → [k8s-playground `cilium/`](https://github.com/OPS-NC/k8s-playground/blob/main/cilium/README.md) | ✅ pool + L2/ARP announcement | ✅ yes |
+| `calico` | `platform-up.sh` → [k8s-playground `calico/`](https://github.com/OPS-NC/k8s-playground/blob/main/calico/README.md) | ❌ BGP only | ⚠️ needs MetalLB on top |
+| `flannel` | `platform-up.sh` | ❌ | ❌ no |
 | `none` | you | ❌ | depends on what you install |
 
 **In practice: keep `cilium`.** It is the only value that makes the lab work end to end,
