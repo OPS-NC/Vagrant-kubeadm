@@ -111,7 +111,8 @@ montée de version.
 vagrant destroy -f
 vagrant up
 ./kubeadm/cluster-up.sh
-./_k8s/platform-up.sh
+export KUBECONFIG="$PWD/kubeconfig" LAB_DIR="$PWD"
+./_k8s/install.sh kubeadm platform
 ```
 
 On obtient un cluster propre sur la version cible, sans état à moitié migré, en à peu près le
@@ -387,8 +388,13 @@ au-delà de la 1.36.
 
 ```bash
 # lab.env : CILIUM_VERSION=1.2x.y
-./_k8s/cilium/cilium-up.sh
+export KUBECONFIG="$PWD/kubeconfig" LAB_DIR="$PWD"
+./_k8s/cilium/cilium-up.sh kubeadm
 ```
+
+À lancer **depuis la racine du dépôt** : `_k8s/` est le sous-module [k8s-playground](https://github.com/OPS-NC/k8s-playground),
+il prend la distribution en premier argument, et il lit `lab.env` / `_out/` via `LAB_DIR` —
+sans cet export, il repartirait sur ses propres valeurs par défaut.
 
 Le script est un `helm upgrade --install` : c'est donc la même commande qu'on installe ou qu'on
 monte de version. Lis d'abord les notes de montée de version de Cilium : un saut de mineure peut

@@ -15,27 +15,37 @@ SSH and `apt`; every step the scripts take is a `kubeadm` command you could type
 error-prone part: the VIP that must exist *before* `kubeadm init`, the `node-ip` every Vagrant
 lab gets wrong, the containerd 2.x config, the certificate SANs you cannot add afterwards.
 
-**The whole path, in three commands:**
+**The whole path, in four steps:**
 
 ```bash
+git clone --recurse-submodules https://github.com/OPS-NC/Vagrant-kubeadm.git
+cd Vagrant-kubeadm
 cp lab.env.example lab.env      # pick the topology
 vagrant up                      # creates and PREPARES the VMs (no cluster yet)
 ./kubeadm/cluster-up.sh         # kubeadm init + join + kubeconfig
-./_k8s/platform-up.sh           # CNI, Envoy Gateway, metrics-server, wildcard TLS
+export KUBECONFIG="$PWD/kubeconfig" LAB_DIR="$PWD"
+./_k8s/install.sh kubeadm platform   # CNI, Envoy Gateway, metrics-server, wildcard TLS
 ```
 
 | | |
 |---|---|
 | 📖 **Browsable docs** | [ops-nc.github.io/Vagrant-kubeadm](https://ops-nc.github.io/Vagrant-kubeadm/) — EN/FR switch, light/dark theme, offline copy with `make docs` |
-| 📦 **Application layer** | [`_k8s/README.md`](_k8s/README.md) |
+| 📦 **Application layer** | [ops-nc.github.io/k8s-playground](https://ops-nc.github.io/k8s-playground/) — its own repo, mounted here as the `_k8s/` submodule |
 | ⬆️ **Kubernetes upgrades** | [`kubeadm/UPGRADE.md`](kubeadm/UPGRADE.md) |
 | 🚑 **Something broken?** | [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) |
 
+> ⚠️ **`--recurse-submodules` is not optional.** `_k8s/` is a **git submodule** pointing at
+> [k8s-playground](https://github.com/OPS-NC/k8s-playground); a plain `git clone` leaves the
+> directory **empty** and `./_k8s/install.sh` returns `No such file or directory`. On a clone
+> already made: `git submodule update --init --recursive` (§1).
+
 > ℹ️ **There is a twin repo, [Vagrant-Talos](https://github.com/OPS-NC/Vagrant-Talos).** Same
-> lab, same IP plan, same `_k8s/` layer — opposite OS and opposite operating model. Talos is
-> immutable, has no SSH and no package manager, and is driven entirely through an API from the
-> host. Here you get a normal distribution and you drive `kubeadm` yourself: more moving
-> parts, and that is the point — this repo is where you see what an installer usually hides.
+> lab, same IP plan, and **literally the same application layer** — both repos mount the same
+> k8s-playground submodule under `_k8s/`. What is opposite is the OS and the operating model:
+> Talos is immutable, has no SSH and no package manager, and is driven entirely through an API
+> from the host. Here you get a normal distribution and you drive `kubeadm` yourself: more
+> moving parts, and that is the point — this repo is where you see what an installer usually
+> hides.
 
 ---
 
@@ -45,6 +55,7 @@ vagrant up                      # creates and PREPARES the VMs (no cluster yet)
 |---|---|---|
 | VirtualBox 7 | hypervisor | https://www.virtualbox.org/ |
 | Vagrant | VM creation | https://developer.hashicorp.com/vagrant |
+| `git` | the repo **and its `_k8s/` submodule** | https://git-scm.com/ |
 | `kubectl` | using the cluster | https://kubernetes.io/docs/tasks/tools/ |
 | `helm` | `_k8s/` addons | https://helm.sh/docs/intro/install/ |
 | `uv` *(optional)* | `make docs` | https://docs.astral.sh/uv/ |
@@ -56,6 +67,22 @@ Debian box (`bento/debian-13`) is downloaded by Vagrant on first use; no plugin 
 
 `kubeadm/cluster-up.sh` checks for exactly two of these up front (`vagrant`, `kubectl`) and
 refuses to start without them.
+
+**The application layer is a submodule, and it needs one command of its own.** `_k8s/` is not a
+directory of this repo: it is a pinned checkout of
+[OPS-NC/k8s-playground](https://github.com/OPS-NC/k8s-playground), the repository shared with
+the Talos twin lab. Cloning without `--recurse-submodules` leaves it empty:
+
+```bash
+git submodule update --init --recursive     # fills _k8s/ on an existing clone
+git submodule update --remote _k8s          # move it to the latest upstream commit
+```
+
+> ⚠️ **`git pull` does NOT update the submodule.** It only moves *this* repo, and the `_k8s/`
+> checkout stays on the commit that was pinned before. After any pull, run
+> `git submodule update --init --recursive` — otherwise you run the documented commands against
+> an older application layer. `git status` showing `modified: _k8s (new commits)` means the
+> checkout no longer matches the pin, nothing more.
 
 > 💡 **`kubectl` on the host should be within one minor of the cluster** (1.35 → 1.37 for a
 > 1.36 cluster). If yours is older, you can always fall back to the in-VM one:
@@ -226,7 +253,7 @@ the host-only network.
 > anyone discovering kubeadm: **kubeadm never installs a CNI**. Until a pod network is in
 > place, the kubelet reports `NetworkReady=false` / `cni plugin not initialized`, CoreDNS
 > stays `Pending`, and the nodes stay `NotReady`. The next command is what fixes it:
-> `./_k8s/platform-up.sh` (§6).
+> `./_k8s/install.sh kubeadm platform` (§6).
 
 > 💡 **`cluster-up.sh` is idempotent** and safe to re-run: `node-init.sh` refuses to re-run
 > `kubeadm init` if `/etc/kubernetes/admin.conf` exists, `node-join.sh` skips any node that
@@ -401,18 +428,55 @@ notes of that vintage are no longer right:
 
 ## 📦 6. What comes next: the application layer
 
-A bare cluster does nothing useful — and here it is not even `Ready`. Everything else lives in
-**[`_k8s/`](_k8s/README.md)**: Cilium, Envoy Gateway, cert-manager, metrics-server, Longhorn,
-Vault, CloudNativePG, Prometheus/Loki, Kyverno, Trivy, MinIO, Argo CD…
+A bare cluster does nothing useful — and here it is not even `Ready`. Everything else —
+Cilium, Envoy Gateway, cert-manager, metrics-server, Longhorn, Vault, CloudNativePG,
+Prometheus/Loki, Kyverno, Trivy, MinIO, Argo CD… — comes from a **separate repository**,
+[k8s-playground](https://github.com/OPS-NC/k8s-playground), mounted here as the `_k8s/`
+submodule.
+
+That layer used to be duplicated in this repo and in the Talos twin. It is now maintained
+**once**, and the target distribution became an **argument** — which is why the entry point is
+`install.sh <distro> …` and no longer a bare `platform-up.sh`. Its documentation is published
+on its own: **<https://ops-nc.github.io/k8s-playground/>**.
 
 ```bash
-./kubeadm/cluster-up.sh            # 1. the cluster (NotReady: no CNI yet)
-./_k8s/platform-up.sh              # 2. CNI → Envoy Gateway → metrics-server → wildcard TLS
-./_k8s/argocd/argocd-up.sh         # 3. opt-in addons
+./kubeadm/cluster-up.sh                     # 1. the cluster (NotReady: no CNI yet)
+
+export KUBECONFIG="$PWD/kubeconfig"         # 2. where the cluster is
+export LAB_DIR="$PWD"                       #    where lab.env and _out/ are — see below
+
+./_k8s/install.sh kubeadm platform          # 3. CNI → Envoy Gateway → metrics-server → TLS
+./_k8s/install.sh kubeadm longhorn vault argocd   # 4. opt-in addons
 ```
 
-`platform-up.sh` installs the CNI first; the nodes go `Ready` within a minute or two of that
-step. Full dependency chain and addon list: [`_k8s/README.md`](_k8s/README.md).
+Useful variants — the distribution (`kubeadm`) is always the **first positional argument**:
+
+| Command | What it does |
+|---|---|
+| `./_k8s/install.sh kubeadm list` | the full catalogue of addons |
+| `./_k8s/install.sh kubeadm all` | platform + every addon, in dependency order |
+| `./_k8s/longhorn/longhorn-up.sh kubeadm` | one addon on its own |
+
+The distribution is resolved in this order: **first positional argument** → `--distro=` →
+the `K8S_DISTRO` environment variable → `DISTRO=` in `lab.env`. Anything else and the scripts
+refuse to run, rather than apply a Talos-shaped manifest on Debian.
+
+`install.sh kubeadm platform` installs the CNI first; the nodes go `Ready` within a minute or
+two of that step. Full dependency chain, addon list and per-addon pitfalls:
+**<https://ops-nc.github.io/k8s-playground/>**.
+
+> ⚠️ **`export LAB_DIR="$PWD"` is mandatory in this layout — this is the trap.**
+> k8s-playground looks for `lab.env` and `_out/` in this order: `$LAB_DIR` / `$LAB_ENV`, then
+> its own repo root, then `<its root>/../Vagrant-KubeADM`. Mounted as a submodule its root
+> **is** `Vagrant-KubeADM/_k8s`, so that last path resolves to
+> `Vagrant-KubeADM/Vagrant-KubeADM`, which does not exist. Resolution then falls back on
+> `_k8s/` itself, where there is neither a `lab.env` nor an `_out/`: the scripts would run on
+> built-in defaults — **wrong domain, wrong CNI** — and with no kubeconfig. `LAB_DIR` is the
+> variable provided for exactly this case; export it next to `KUBECONFIG`, every time.
+
+> ⚠️ **If `_k8s/` is empty**, the submodule was never initialised:
+> `git submodule update --init --recursive` (§1). To pull a newer application layer:
+> `git submodule update --remote _k8s`.
 
 > ⚠️ **This layer assumes `CNI=cilium`** (the default). It needs a `LoadBalancer` Service that
 > actually gets an IP, which on a host-only network only Cilium's L2/ARP announcement
@@ -460,6 +524,15 @@ After a `destroy`, also clear the host-side state before rebuilding:
 
 ```bash
 rm -rf _out kubeconfig
+```
+
+Keeping the repo current is **two** commands, not one — `git pull` moves this repo only, and
+leaves `_k8s/` on the previously pinned commit:
+
+```bash
+git pull                                  # this repo (Vagrantfile, kubeadm/, docs)
+git submodule update --init --recursive   # _k8s/ back onto the commit this repo pins
+git submodule update --remote _k8s        # or: jump to the latest k8s-playground
 ```
 
 ### 7.1 Growing the lab
@@ -516,10 +589,12 @@ cannot be changed on a live cluster.
 ## 🚑 8. Troubleshooting
 
 Symptoms and fixes have their own page so this one stays about installing:
-**[`TROUBLESHOOTING.md`](TROUBLESHOOTING.md)**. The four you are most likely to hit:
+**[`TROUBLESHOOTING.md`](TROUBLESHOOTING.md)**. The ones you are most likely to hit:
 
 - **All nodes `NotReady`, CoreDNS `Pending`** → no CNI yet. Expected until
-  `./_k8s/platform-up.sh` — kubeadm never installs one.
+  `./_k8s/install.sh kubeadm platform` — kubeadm never installs one.
+- **`./_k8s/install.sh: No such file or directory`** → the `_k8s/` submodule was never
+  initialised: `git submodule update --init --recursive`.
 - **`cluster-up.sh` stops on "the apiserver does not answer on the VIP"** → either keepalived
   is not carrying the VIP (`vagrant ssh k8s-cp1 -c "ip -4 addr show | grep 192.168.56.5"`,
   `sudo systemctl status keepalived`), or the apiserver itself is not starting
@@ -531,8 +606,9 @@ Symptoms and fixes have their own page so this one stays about installing:
 - **Gateway stuck at `EXTERNAL-IP <pending>`** → `CNI` is not `cilium`, so nothing announces
   LoadBalancer IPs on the host-only network (§10).
 
-Addon-specific problems live in the ⚠️ pitfalls and 🚑 troubleshooting sections of each
-`_k8s/<addon>/README.md` — index in [`_k8s/README.md`](_k8s/README.md).
+Addon-specific problems are documented with the addons themselves, in the ⚠️ pitfalls and 🚑
+troubleshooting sections of the k8s-playground pages:
+**<https://ops-nc.github.io/k8s-playground/>**.
 
 ---
 
@@ -660,14 +736,14 @@ instead of in an escaping nightmare inside `vagrant ssh -c`.
 
 **kubeadm installs no CNI, ever.** Unlike the Talos twin repo — where flannel can be laid down
 by the OS at bootstrap — here the pod network is *always* installed afterwards, by
-`_k8s/platform-up.sh`. `CNI` in `lab.env` is read by `cluster-up.sh` (for the kube-proxy
-decision and `_out/cluster.env`) and by `platform-up.sh` (which chart to install).
+`./_k8s/install.sh kubeadm platform`. `CNI` in `lab.env` is read by `cluster-up.sh` (for the
+kube-proxy decision and `_out/cluster.env`) and by the platform step (which chart to install).
 
 | `CNI=` | Who installs it | `LoadBalancer` IP | `_k8s/` layer usable |
 |---|---|---|---|
-| **`cilium`** *(default)* | `platform-up.sh` → [`_k8s/cilium/`](_k8s/cilium/README.md) | ✅ pool + L2/ARP announcement | ✅ yes |
-| `calico` | `platform-up.sh` → [`_k8s/calico/`](_k8s/calico/README.md) | ❌ BGP only | ⚠️ needs MetalLB on top |
-| `flannel` | `platform-up.sh` | ❌ | ❌ no |
+| **`cilium`** *(default)* | `install.sh kubeadm platform` → [k8s-playground `cilium/`](https://github.com/OPS-NC/k8s-playground/blob/main/cilium/README.md) | ✅ pool + L2/ARP announcement | ✅ yes |
+| `calico` | `install.sh kubeadm platform` → [k8s-playground `calico/`](https://github.com/OPS-NC/k8s-playground/blob/main/calico/README.md) | ❌ BGP only | ⚠️ needs MetalLB on top |
+| `flannel` | `install.sh kubeadm platform` | ❌ | ❌ no |
 | `none` | you | ❌ | depends on what you install |
 
 **In practice: keep `cilium`.** It is the only value that makes the lab work end to end,
@@ -690,8 +766,8 @@ on `NetworkPolicy`; `flannel` for a deliberately bare cluster.
 > is the one Cilium's own documentation uses.
 
 > ⚠️ **`POD_CIDR` must be the CIDR the CNI really announces.** Cilium in `cluster-pool` mode
-> defaults to `10.0.0.0/8`, unrelated to what kubeadm was told; `_k8s/cilium/cilium-up.sh`
-> passes `POD_CIDR` back to it explicitly. Two divergent values give you a broken pod network
+> defaults to `10.0.0.0/8`, unrelated to what kubeadm was told; k8s-playground's
+> `cilium/cilium-up.sh` passes `POD_CIDR` back to it explicitly. Two divergent values give you a broken pod network
 > that looks configured.
 
 > ⚠️ **Switching CNI on an existing cluster is not supported.** `./kubeadm/cluster-reset.sh`
@@ -743,7 +819,9 @@ In short: use it, modify it, redistribute it, including commercially, as long as
 copyright notice and state your changes. It comes with **no warranty**: this is a lab, do not
 run it in production.
 
-The license covers what this repo actually contains — the `Vagrantfile`, the `kubeadm/` and
-`_k8s/` scripts, the templates, the manifests and the documentation. It does **not** extend to
-the third-party components those scripts download (Kubernetes, containerd, keepalived, Cilium,
-Envoy Gateway, Longhorn, Vault…), each of which keeps its own license.
+The license covers what this repo actually contains — the `Vagrantfile`, the `kubeadm/`
+scripts, the templates, the manifests and the documentation. It does **not** extend to the
+third-party components those scripts download (Kubernetes, containerd, keepalived, Cilium,
+Envoy Gateway, Longhorn, Vault…), each of which keeps its own license, nor to the `_k8s/`
+submodule: [k8s-playground](https://github.com/OPS-NC/k8s-playground) is a separate repository
+and carries its own `LICENSE`.

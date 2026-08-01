@@ -25,7 +25,7 @@ BILINGUE : chaque page existe en deux versions, dans le MÊME dossier —
 l'anglais porte le nom canonique (`README.md`, `CLAUDE.md`, `UPGRADE.md`), le
 français son miroir (`LISEZ-MOI.md`, `MISE-A-JOUR.md`), cf.
 MIROIRS. L'anglais est la langue par défaut ; le sélecteur EN/FR de la barre
-latérale bascule tout le site et l'URL (`#fr/_k8s-longhorn-readme`).
+latérale bascule tout le site et l'URL (`#fr/kubeadm-upgrade`).
 
 AJOUTER UNE PAGE : rien à faire, tout `*.md` du dépôt est découvert
 automatiquement. Seuls le regroupement du menu et l'emoji viennent de
@@ -55,7 +55,11 @@ from pygments.util import ClassNotFound
 RACINE = Path(__file__).resolve().parent.parent
 
 # Dossiers jamais explorés (dépendances, artefacts, sortie du générateur).
-EXCLUS = {".git", ".vagrant", ".terraform", "node_modules", "docs", "iso", "_out"}
+# `_k8s` est un SOUS-MODULE (dépôt k8s-playground) : sa documentation est construite et
+# publiée par CE dépôt-là, pas par celui-ci. L'inclure ici produirait deux copies
+# divergentes de la même doc, et casserait le build en CI où le sous-module n'est pas
+# forcément extrait (le dossier y est alors vide). Un lien externe le remplace dans le menu.
+EXCLUS = {".git", ".vagrant", ".terraform", "node_modules", "docs", "iso", "_out", "_k8s"}
 
 # Pages publiées MÊME si git les ignore. Volontairement VIDE : la page est publiée
 # sur GitHub Pages, où le build ne dispose que des fichiers versionnés. Y forcer un
@@ -85,6 +89,11 @@ LANGUE_DEFAUT = "en"
 # est auto-contenue, donc pas de badge shields.io ni d'icône servie par un CDN.
 DEPOT_URL = "https://github.com/OPS-NC/Vagrant-kubeadm"
 
+# Documentation de la couche applicative. Elle vit dans le dépôt k8s-playground, monté
+# ici en sous-module sur `_k8s/` et partagé avec le lab Talos : une seule source pour les
+# deux, donc un seul endroit où la maintenir.
+PLATEFORME_URL = "https://ops-nc.github.io/k8s-playground/"
+
 # Bannière « English · Français » posée en tête de chaque fichier pour les
 # lecteurs de GitHub. La page HTML a son propre sélecteur : on la retire.
 RE_BANNIERE = re.compile(r"<!--\s*i18n\s*-->.*?<!--\s*/i18n\s*-->\s*", re.DOTALL)
@@ -112,6 +121,8 @@ LIBELLES: dict[str, dict[str, str]] = {
         "badge_langue":    "EN",
         "badge_langue_titre": "Not translated yet — English page shown",
         "depot":           "GitHub repository",
+        "plateforme":      "Application layer (k8s-playground)",
+        "plateforme_court": "Platform",
         "sous_titre":      "Kubernetes lab built with kubeadm on VirtualBox, driven by Vagrant.",
     },
     "fr": {
@@ -135,6 +146,8 @@ LIBELLES: dict[str, dict[str, str]] = {
         "badge_langue":    "EN",
         "badge_langue_titre": "Pas encore traduit — page anglaise affichée",
         "depot":           "Dépôt GitHub",
+        "plateforme":      "Couche applicative (k8s-playground)",
+        "plateforme_court": "Plateforme",
         "sous_titre":      "Lab Kubernetes monté avec kubeadm sur VirtualBox, piloté par Vagrant.",
     },
 }
@@ -142,57 +155,20 @@ LIBELLES: dict[str, dict[str, str]] = {
 # --- Plan du menu -----------------------------------------------------------
 # (titres par langue, emoji, chemins ANGLAIS ou dossiers, dans l'ordre d'affichage)
 GROUPES: list[tuple[dict[str, str], str, list[str]]] = [
-    ({"en": "The lab",       "fr": "Le lab"},           "🏠",
+    ({"en": "The lab",  "fr": "Le lab"}, "🏠",
      ["README.md", "kubeadm/UPGRADE.md", "TROUBLESHOOTING.md"]),
-    ({"en": "Platform",      "fr": "Plateforme"},       "📦", ["_k8s/README.md"]),
-    ({"en": "Networking",    "fr": "Réseau"},           "🌐",
-     ["_k8s/cilium", "_k8s/calico", "_k8s/envoy-gateway", "_k8s/self-signed",
-      "_k8s/cert-manager"]),
-    ({"en": "Storage",       "fr": "Stockage"},         "💾",
-     ["_k8s/longhorn", "_k8s/local-path-storage", "_k8s/minio-s3"]),
-    ({"en": "Secrets",       "fr": "Secrets"},          "🔐",
-     ["_k8s/vault-cluster", "_k8s/vault-secret-operator"]),
-    ({"en": "Databases",     "fr": "Bases de données"}, "🗄️",
-     ["_k8s/cloudnative-pg"]),
-    ({"en": "Observability", "fr": "Observabilité"},    "👁️",
-     ["_k8s/observability", "_k8s/node-problem-detector", "_k8s/chaos-kube"]),
-    ({"en": "Security",      "fr": "Sécurité"},         "🛡️",
-     ["_k8s/kyverno", "_k8s/trivy-operator"]),
-    ({"en": "Demos",         "fr": "Démos"},            "🧪",
-     ["_k8s/argocd", "_k8s/wordpress-example"]),
-    # En dernier, volontairement : CLAUDE.md ne s'adresse pas au lecteur du lab mais
-    # aux agents de code, et il occupait la 2e place du menu.
-    ({"en": "AI agent",      "fr": "Agent IA"},         "🤖", ["CLAUDE.md"]),
+    # Les groupes Réseau / Stockage / Secrets / Observabilité / Sécurité / Démos ont été
+    # retirés avec le passage de `_k8s/` en sous-module : ces pages appartiennent au dépôt
+    # k8s-playground, qui publie sa propre documentation (cf. PLATEFORME_URL).
+    ({"en": "AI agent", "fr": "Agent IA"}, "🤖", ["CLAUDE.md"]),
 ]
 AUTRES = {"en": "Other", "fr": "Autres"}
 
 EMOJIS: dict[str, str] = {
-    "README.md":                                  "🏠",
-    "CLAUDE.md":                                  "🤖",
-    "TROUBLESHOOTING.md":                         "🚑",
-    "kubeadm/UPGRADE.md":                           "⬆️",
-    "_k8s/README.md":                             "📦",
-    "_k8s/cilium/README.md":                      "🐝",
-    "_k8s/calico/README.md":                      "🐆",
-    "_k8s/envoy-gateway/README.md":               "🚪",
-    "_k8s/self-signed/README.md":                 "🔏",
-    "_k8s/cert-manager/README.md":                "📜",
-    "_k8s/longhorn/README.md":                    "🐮",
-    "_k8s/local-path-storage/README.md":          "📁",
-    "_k8s/minio-s3/README.md":                    "🪣",
-    "_k8s/minio-s3/cluster/README.md":            "🧺",
-    "_k8s/vault-cluster/README.md":               "🔒",
-    "_k8s/vault-secret-operator/README.md":       "🔑",
-    "_k8s/vault-secret-operator/k8s/README.md":   "☸️",
-    "_k8s/vault-secret-operator/vault/README.md": "⚙️",
-    "_k8s/cloudnative-pg/README.md":              "🐘",
-    "_k8s/observability/README.md":               "📈",
-    "_k8s/node-problem-detector/README.md":       "🩺",
-    "_k8s/chaos-kube/README.md":                  "🐒",
-    "_k8s/kyverno/README.md":                     "⚖️",
-    "_k8s/trivy-operator/README.md":              "🔎",
-    "_k8s/argocd/README.md":                      "🐙",
-    "_k8s/wordpress-example/README.md":           "📝",
+    "README.md":            "🏠",
+    "CLAUDE.md":            "🤖",
+    "TROUBLESHOOTING.md":   "🚑",
+    "kubeadm/UPGRADE.md":   "⬆️",
 }
 
 # Encarts : un marqueur en tête de citation choisit la couleur. Les deux langues
@@ -850,6 +826,10 @@ JS = r"""
     document.querySelectorAll('[data-depot]').forEach(a => {
       a.setAttribute('aria-label', m.depot); a.setAttribute('title', m.depot);
     });
+    document.querySelectorAll('[data-plateforme]').forEach(a => {
+      a.setAttribute('aria-label', m.plateforme); a.setAttribute('title', m.plateforme);
+      const s = a.querySelector('span'); if (s) s.textContent = m.plateforme_court;
+    });
     document.querySelectorAll('.copier').forEach(b => { b.textContent = m.copier; });
     majTheme();
     if (boite.firstElementChild) boite.firstElementChild.textContent = m.sommaire;
@@ -1054,6 +1034,19 @@ def lien_depot(mots: dict[str, str]) -> str:
             f'<span>GitHub</span></a>')
 
 
+def lien_plateforme(mots: dict[str, str]) -> str:
+    """Lien vers la doc de la couche applicative, sortie de ce dépôt.
+
+    `_k8s/` est un sous-module pointant sur k8s-playground, partagé avec le lab Talos.
+    Sa documentation est publiée par ce dépôt-là ; on ne la duplique pas ici, on y renvoie.
+    Le lien est EXTERNE : il ouvre un nouvel onglet, comme le badge GitHub.
+    """
+    intitule = html.escape(mots["plateforme"], quote=True)
+    return (f'<a class="depot" href="{PLATEFORME_URL}" target="_blank" rel="noopener noreferrer"'
+            f' data-plateforme title="{intitule}" aria-label="{intitule}">☸️'
+            f'<span>{html.escape(mots["plateforme_court"])}</span></a>')
+
+
 def rendre(docs: list[dict]) -> list[dict]:
     """Rend chaque document dans chaque langue (une entrée par page HTML)."""
     md = creer_convertisseur()
@@ -1189,6 +1182,7 @@ def construire(rendus: list[dict], version: str, alertes: list[str]) -> str:
         <span>Vagrant-KubeADM<small>{html.escape(version)}</small></span>
       </div>
       {lien_depot(mots)}
+      {lien_plateforme(mots)}
     </div>
     {selecteur_langue(mots)}
     {selecteur_theme(mots)}

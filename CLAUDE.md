@@ -4,8 +4,9 @@
 the [Talos sibling](https://github.com/OPS-NC/Vagrant-Talos) of this lab, the nodes are ordinary
 Linux boxes: **SSH, `apt`, `systemd`, `journalctl` all work**, and every step is a `kubeadm`
 command you could type by hand. User docs: [`README.md`](README.md) · application layer:
-[`_k8s/README.md`](_k8s/README.md) · symptoms: [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) ·
-version bumps: [`kubeadm/UPGRADE.md`](kubeadm/UPGRADE.md).
+<https://ops-nc.github.io/k8s-playground/> · symptoms:
+[`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) · version bumps:
+[`kubeadm/UPGRADE.md`](kubeadm/UPGRADE.md).
 
 ## 🚫 There is NO cluster, and you must not try to build one
 
@@ -16,6 +17,28 @@ by running it. The one thing you may and should run is `make validate` — see b
 
 If a change can only be proven by a live cluster, say so explicitly and hand the verification
 back to the human, with the exact commands to run.
+
+## 🚫 `_k8s/` is a SUBMODULE — never edit it from here
+
+`_k8s/` is not a directory of this repository. It is a pinned checkout of
+**[OPS-NC/k8s-playground](https://github.com/OPS-NC/k8s-playground)**, the application layer
+shared with the [Talos sibling](https://github.com/OPS-NC/Vagrant-Talos) lab: one source, one
+place to maintain it. Its documentation is published separately at
+<https://ops-nc.github.io/k8s-playground/>.
+
+- **Read it freely** to understand how the layer behaves — it is checked out on disk.
+- **Never write to it.** Editing a file under `_k8s/` dirties another repository's working
+  tree and produces a commit that does not belong here. Addon changes are made *in
+  k8s-playground*, then this repo bumps the pointer.
+- **Never link to `_k8s/…*.md` from a Markdown file of this repo.** Those pages are not part of
+  this documentation set and `make validate-docs` fails on the dead link. Point at
+  <https://ops-nc.github.io/k8s-playground/>, or at the file on GitHub
+  (`https://github.com/OPS-NC/k8s-playground/blob/main/<dir>/README.md` — the directories sit at
+  the **root** of that repo, with no `_k8s/` prefix).
+- Paths on disk (`./_k8s/install.sh`, `_k8s/cilium/cilium-up.sh`) stay correct and must not be
+  rewritten: the submodule really does mount there.
+- If `_k8s/` is empty on the machine you work on, the submodule was never initialised:
+  `git submodule update --init --recursive`. `git pull` alone does **not** update it.
 
 ## 🚀 Order of work
 
@@ -32,12 +55,22 @@ lab.env  ──────────────► Vagrantfile ──► kub
    │                          ├─ vagrant ssh others → kubeadm/node-join.sh (kubeadm join)
    │                          └─ writes ./kubeconfig and _out/cluster.env
    │
-   └──────────────────► _k8s/platform-up.sh                          (on the HOST)
+   └──────────────────► _k8s/install.sh kubeadm platform              (on the HOST, SUBMODULE)
                               ├─ [1/4] CNI  → _k8s/cilium/cilium-up.sh (or calico/flannel/none)
                               ├─ [2/4] Envoy Gateway + main-gateway
                               ├─ [3/4] metrics-server
                               └─ [4/4] wildcard TLS → _k8s/self-signed/ or cert-manager
-                                    then opt-in addons, one _k8s/<addon>/<addon>-up.sh each
+                                    then opt-in addons: ./_k8s/install.sh kubeadm <addon>…
+```
+
+The application-layer entry point takes the **distribution as its first positional argument**
+(`kubeadm` here, `talos` in the sibling lab), and it needs **`LAB_DIR`** exported to find
+`lab.env` and `_out/` — see the pitfall section below. The full sequence from the host:
+
+```bash
+export KUBECONFIG="$PWD/kubeconfig"
+export LAB_DIR="$PWD"
+./_k8s/install.sh kubeadm platform
 ```
 
 Undo without destroying the VMs: `kubeadm/cluster-reset.sh` → `kubeadm/node-reset.sh` in every
@@ -54,7 +87,8 @@ VM (workers first, so they deregister while the API still answers).
 | `kubeadm/node-init.sh` / `node-join.sh` | the actual `kubeadm init` / `kubeadm join`, in-VM. Both refuse to act on an already-initialised/joined node. |
 | `kubeadm/cluster-reset.sh` / `node-reset.sh` | undo the cluster, keep the VMs. |
 | `kubeadm/templates/*.yaml.tpl` | `InitConfiguration` / `JoinConfiguration` (v1beta4), `@MARKER@` substitution. |
-| `_k8s/` | the application layer. `platform-up.sh` is the base; every other directory is opt-in and carries its own `README.md` + `*-up.sh`. |
+| `_k8s/` | **git submodule** → [k8s-playground](https://github.com/OPS-NC/k8s-playground), the application layer shared with the Talos lab. Entry point `install.sh <distro> …`; `platform` is the base, every other directory is an opt-in addon. **Read-only from here** — its code, its docs and its issues live in that repo. |
+| `.gitmodules` | declares that submodule (path `_k8s`, url `…/k8s-playground.git`). Changing the pointer = `git add _k8s`, a normal commit of this repo. |
 | `docs/build.py` | generates the single-page bilingual `docs/index.html`. |
 | `Makefile` | `make validate`, `make docs`. Nothing here ever touches a running cluster. |
 | `.github/workflows/` | CI calls the **same** `make` targets. Never duplicate a check's definition in a workflow. |
@@ -86,19 +120,25 @@ deliberately copied into several files:
 | `K8S_VERSION`, `K8S_APT_MINOR` | `Vagrantfile`, `kubeadm/provision.sh`, `kubeadm/cluster-up.sh` (no `K8S_APT_MINOR` there — it needs none) |
 | `CONTROL_PLANES`, `WORKERS`, `NODE_PREFIX` | `Vagrantfile`, `kubeadm/cluster-up.sh`, `kubeadm/cluster-reset.sh` |
 | `NETWORK`, `VIP`, `CP_IP_*`, `WK_IP_*` | `Vagrantfile`, `kubeadm/cluster-up.sh`, `kubeadm/provision.sh` |
-| `POD_CIDR`, `SERVICE_CIDR`, `CNI`, `KUBE_PROXY_REPLACEMENT` | `kubeadm/cluster-up.sh`, `_k8s/platform-up.sh`, `_k8s/cilium/cilium-up.sh` |
-| `LB_POOL_START` / `LB_POOL_END`, `CILIUM_VERSION` | `_k8s/platform-up.sh`, `_k8s/cilium/cilium-up.sh` |
-| `LAB_DOMAIN`, `SELF_SIGNED`, `LAB_ACME_ISSUER` | `_k8s/platform-up.sh`, `_k8s/self-signed/selfsigned-up.sh` |
+| `POD_CIDR`, `SERVICE_CIDR`, `CNI`, `KUBE_PROXY_REPLACEMENT` | `kubeadm/cluster-up.sh` — **and, in k8s-playground**, `platform-up.sh`, `cilium/cilium-up.sh` |
+| `LB_POOL_START` / `LB_POOL_END`, `CILIUM_VERSION` | k8s-playground only: `platform-up.sh`, `cilium/cilium-up.sh` |
+| `LAB_DOMAIN`, `SELF_SIGNED`, `LAB_ACME_ISSUER` | k8s-playground only: `platform-up.sh` (`lib/profiles/kubeadm.sh` for the per-distro default), `self-signed/selfsigned-up.sh` |
 
 > ⚠️ **Two defaults that diverge produce an incoherent lab** — packages from one minor,
 > generated configuration for another; a pod CIDR declared to kubeadm that the CNI does not
 > announce; a wildcard Secret name the Gateway does not look for. Changing a default means
 > changing it **everywhere in the same commit**, `lab.env.example` included.
 
-The `_k8s/*-up.sh` scripts add one more layer, and the order matters: **`_out/cluster.env`
-(facts about the running cluster) wins over `lab.env` (a mere intent, possibly edited after the
-bootstrap)**. `_k8s/cilium/cilium-up.sh` implements this in `lire_param`. Keep that ordering
-when you add a script.
+> ⚠️ **The last three rows straddle two repositories.** Their consumers live in
+> k8s-playground, which this repo only pins. A default changed here and not there (or the
+> reverse) diverges *silently* — `make validate-defaults` only compares `lab.env.example`,
+> the `Vagrantfile` and `kubeadm/cluster-up.sh`, and cannot see across the submodule. Changing
+> one of those keys means a PR in **both** repos, and bumping the pointer here.
+
+The k8s-playground `*-up.sh` scripts add one more layer, and the order matters:
+**`_out/cluster.env` (facts about the running cluster) wins over `lab.env` (a mere intent,
+possibly edited after the bootstrap)**. `cilium/cilium-up.sh` implements this in `lire_param`.
+Both files are found through `LAB_DIR` — see the pitfall below.
 
 ## ✅ Validating a change WITHOUT a cluster (do this every time)
 
@@ -109,8 +149,8 @@ make docs          # regenerates docs/index.html (needs uv)
 
 | Target | What it proves |
 |---|---|
-| `validate-shell` | `bash -n` on every git-tracked `*.sh` |
-| `validate-yaml` | every git-tracked `*.yaml`/`*.yml` parses (PyYAML pulled in by `uv`) |
+| `validate-shell` | `bash -n` on every git-tracked `*.sh` — **the `_k8s/` submodule is not tracked file by file, so none of its scripts are checked here** |
+| `validate-yaml` | every git-tracked `*.yaml`/`*.yml` parses (PyYAML pulled in by `uv`) — same submodule caveat |
 | `validate-vagrant` | `vagrant validate`. In CI: `VAGRANT_VALIDATE_FLAGS=--ignore-provider` (runners have no VirtualBox) |
 | `validate-kubeadm` | renders the three templates with dummy values into an `mktemp -d`, parses them, **and** runs `kubeadm config validate` if the binary is present. This is the target that catches a v1beta4 schema mistake. |
 | `validate-docs` | builds the docs into a throwaway file with `--strict` and **fails on the first unresolved `*.md` link or anchor** |
@@ -199,6 +239,27 @@ resolve. Run it after renaming any heading.
   **unicast** (multicast misbehaves on a VirtualBox host-only switch), and the isolation knob is
   `VRRP_ROUTER_ID`, not a cleartext VRRPv2 password.
 
+### The `_k8s/` submodule
+
+- **`LAB_DIR` must be exported before any `_k8s/` script.** k8s-playground resolves `lab.env`
+  and `_out/` in this order: `$LAB_DIR` / `$LAB_ENV` → its own repo root →
+  `<its root>/../Vagrant-KubeADM`. That last candidate assumes the two repos are **siblings**;
+  mounted as a submodule its root *is* `Vagrant-KubeADM/_k8s`, so the path becomes
+  `Vagrant-KubeADM/Vagrant-KubeADM`, which does not exist, and resolution falls back on `_k8s/`
+  itself — no `lab.env`, no `_out/`, so built-in defaults (wrong domain, wrong CNI) and no
+  kubeconfig. Every doc example that runs the application layer must show
+  `export LAB_DIR="$PWD"` next to `export KUBECONFIG="$PWD/kubeconfig"`. Do not "simplify" it
+  away.
+- **The distribution is an argument, not a guess.** `./_k8s/install.sh kubeadm platform`,
+  `./_k8s/longhorn/longhorn-up.sh kubeadm`. Resolution order: first positional argument →
+  `--distro=` → `K8S_DISTRO` → `DISTRO=` in `lab.env`. A bare `./_k8s/platform-up.sh` with none
+  of those is not the documented invocation.
+- **Do not edit anything under `_k8s/`** from this repo, and do not link to its `*.md` files.
+  See the dedicated section at the top of this file.
+- **`make validate-shell` / `validate-yaml` only cover files tracked by *this* repo.** The
+  submodule's scripts and manifests are validated in k8s-playground's own CI, not here. A green
+  `make validate` says nothing about the application layer.
+
 ## 🔐 Secrets
 
 - `lab.env` is gitignored and may hold **real** secrets (`CLOUDFLARE_API_TOKEN`). Never commit
@@ -247,9 +308,14 @@ resolve. Run it after renaming any heading.
   a newcomer opens.
 - **Commit messages in English**, conventional (`fix(...)`, `feat(...)`, `docs: ...`). Branch
   from `main`, one feature per PR, squash merge.
-- Every `_k8s/<addon>/README.md` follows the same skeleton (one emoji per `##`, `⚠️`/`💡`/`ℹ️`
-  callouts) and carries its own pitfalls section. Stick to plain CommonMark + GitHub tables so
-  the generator renders it.
+- Every page of this repo follows the same skeleton (one emoji per `##`, `⚠️`/`💡`/`ℹ️`
+  callouts, a pitfalls section where it applies). Stick to plain CommonMark + GitHub tables so
+  the generator renders it. The addon pages follow the same convention **in k8s-playground**,
+  where they are written and published.
+- **No Markdown link may point into `_k8s/`.** `docs/build.py --strict` resolves `*.md` links
+  and anchors, the submodule's pages are not part of this documentation set, and
+  `make validate-docs` fails on them. Use <https://ops-nc.github.io/k8s-playground/> or a GitHub
+  URL instead.
 
 ### Adding a component = propagating it EVERYWHERE
 
@@ -258,8 +324,7 @@ isolated mention is a documentation bug — the reader will never find it.
 
 | Where | What to update |
 |---|---|
-| `_k8s/<addon>/README.md` | the dedicated page |
-| `_k8s/README.md` | the index table of the right family, and the dependency chain if it changed |
+| **k8s-playground** (separate repo) | the addon's own page and the index table — *not editable from here*; open a PR there, then bump the `_k8s` pointer in this repo |
 | `README.md` (root) | only if it touches the install path, `lab.env` or the CNI choice |
 | `lab.env.example` | every new variable, commented, with a **neutral** default |
 | every file carrying a duplicated fallback default | see the golden rule above |
@@ -281,7 +346,9 @@ Knowing what is *not* here saves you from "adding" it back.
   kube-vip stays a legitimate option *once the cluster is up* (`--services` mode) — worth
   mentioning, never the default path.
 - **No MetalLB.** Cilium's L2/ARP announcement gives LoadBalancer Services their IP. MetalLB is
-  only relevant on the `CNI=calico` branch, and that is documented in `_k8s/calico/`.
+  only relevant on the `CNI=calico` branch, and that is documented with the
+  [`calico/`](https://github.com/OPS-NC/k8s-playground/blob/main/calico/README.md) addon in
+  k8s-playground.
 - **No cluster bootstrap inside `vagrant up`.** The `Vagrantfile` prepares VMs and stops there.
   Bootstrapping is a separate, re-runnable script — that separation is what makes growing the
   lab a re-run instead of a rebuild.
