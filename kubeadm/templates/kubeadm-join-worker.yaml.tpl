@@ -1,8 +1,8 @@
-# Modèle de configuration `kubeadm join` (worker) — rendu dans _out/join-<node>.yaml
-# par kubeadm/cluster-up.sh.
+# `kubeadm join` (worker) configuration template — rendered into _out/join-<node>.yaml
+# by kubeadm/cluster-up.sh.
 #
-# Identique au modèle control plane, sans le bloc `controlPlane` : un worker n'héberge
-# ni apiserver, ni etcd, et n'a donc besoin d'aucune clé de certificat.
+# Identical to the control-plane template, without the `controlPlane` block: a worker
+# hosts neither apiserver nor etcd, and therefore needs no certificate key.
 
 apiVersion: kubeadm.k8s.io/v1beta4
 kind: JoinConfiguration
@@ -11,8 +11,8 @@ nodeRegistration:
   criSocket: unix:///run/containerd/containerd.sock
   imagePullPolicy: IfNotPresent
   kubeletExtraArgs:
-    # Sans ceci, le worker s'enregistre avec l'IP de sa carte NAT (10.0.2.15),
-    # identique sur toutes les VM. Cf. le commentaire détaillé dans kubeadm-init.yaml.tpl.
+    # Without this, the worker registers with the IP of its NAT NIC (10.0.2.15),
+    # identical on every VM. See the detailed comment in kubeadm-init.yaml.tpl.
     - name: node-ip
       value: "@NODE_IP@"
 discovery:

@@ -1,11 +1,11 @@
-# Makefile — raccourcis du lab. RIEN ici ne touche à un cluster en route.
+# Makefile — lab shortcuts. NOTHING here touches a running cluster.
 #
-#   make docs        régénère la documentation HTML bilingue (docs/index.html)
-#   make validate    valide Vagrantfile + scripts + YAML + modèles kubeadm + liens
-#                    de la doc, SANS cluster
+#   make docs        regenerates the bilingual HTML documentation (docs/index.html)
+#   make validate    validates Vagrantfile + scripts + YAML + kubeadm templates + doc
+#                    links, WITHOUT a cluster
 #
-# `docs` a besoin de `uv` (https://docs.astral.sh/uv/) : les dépendances Python sont
-# déclarées en PEP 723 dans docs/build.py et installées à la volée.
+# `docs` needs `uv` (https://docs.astral.sh/uv/): the Python dependencies are declared in
+# PEP 723 form inside docs/build.py and installed on the fly.
 
 SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
@@ -13,109 +13,124 @@ SHELL := /bin/bash
 
 DOCS_OUT := docs/index.html
 
-# PyYAML n'est garanti présent nulle part (ni en local, ni sur un runner) : on passe
-# par uv, déjà exigé par `make docs`. `--no-project` : ne pas chercher un pyproject.toml
-# qui n'existe pas.
+# PyYAML is guaranteed nowhere (neither locally nor on a runner): we go through uv,
+# already required by `make docs`. `--no-project`: do not look for a pyproject.toml that
+# does not exist.
 YAML_PY := uv run --quiet --with pyyaml --no-project python
-# Drapeaux ajoutés à `vagrant validate` (cf. validate-vagrant).
+# Flags added to `vagrant validate` (see validate-vagrant).
 VAGRANT_VALIDATE_FLAGS ?=
 
 .PHONY: help docs docs-open validate validate-shell validate-yaml validate-vagrant \
         validate-kubeadm validate-defaults validate-submodule validate-docs k8s-update clean
 
-help: ## Affiche cette aide
+help: ## Show this help
 	@grep -hE '^[a-z-]+:.*?##' $(MAKEFILE_LIST) \
 	  | awk 'BEGIN{FS=":.*?## "}{printf "  \033[1m%-18s\033[0m %s\n", $$1, $$2}'
 
-docs: ## Régénère docs/index.html depuis tous les README (EN + miroirs FR)
+docs: ## Regenerate docs/index.html from every README (EN + FR mirrors)
 	@uv run docs/build.py
 
-docs-open: docs ## Régénère puis ouvre la doc dans le navigateur
+docs-open: docs ## Regenerate then open the documentation in the browser
 	@xdg-open $(DOCS_OUT) >/dev/null 2>&1 || open $(DOCS_OUT)
 
-validate: validate-shell validate-yaml validate-vagrant validate-kubeadm validate-defaults validate-submodule validate-docs ## Tout valider (sans cluster)
-	@echo "✅ Validation complète OK"
+validate: validate-shell validate-yaml validate-vagrant validate-kubeadm validate-defaults validate-submodule validate-docs ## Validate everything (without a cluster)
+	@echo "✅ Full validation OK"
 
-# lab.env est la SOURCE UNIQUE, mais ses valeurs sont dupliquées comme FILET DE SÉCURITÉ
-# dans le Vagrantfile et dans kubeadm/cluster-up.sh (pour que le lab démarre sans lab.env).
-# C'est la fragilité assumée du dépôt : deux défauts qui divergent donnent un lab
-# incohérent — des paquets 1.36 avec une config générée pour 1.35, ou pire, un Vagrantfile
-# qui crée 3 VM quand cluster-up.sh n'en joint qu'une. Ce test rend la divergence
-# impossible à committer sans s'en apercevoir.
+# lab.env is the SINGLE SOURCE, but its values are duplicated as a SAFETY NET in the
+# Vagrantfile and in kubeadm/cluster-up.sh (so the lab starts without a lab.env).
+# That is the repo's acknowledged fragility: two defaults that diverge give an incoherent
+# lab — 1.36 packages with a configuration generated for 1.35, or worse, a Vagrantfile that
+# creates 3 VMs when cluster-up.sh only joins one. This test makes the divergence
+# impossible to commit without noticing.
 #
-# ⚠️ Les deux extractions ci-dessous ont été un NID À FAUX NÉGATIFS. Version initiale :
-#      sed -n "s/.*ENV\[\"$$k\"\][^|]*|| \([^)]*\)).*/\1/p"   <- exigeait une ')'
-#    Or le Vagrantfile écrit les valeurs sous DEUX formes :
-#      K8S_VERSION    = ENV["K8S_VERSION"] || "1.36.3"     (sans parenthèse)
-#      CONTROL_PLANES = (ENV["CONTROL_PLANES"] || 1).to_i  (avec)
-#    K8S_VERSION et NETWORK ressortaient donc VIDES, le garde `[ -n "$$vf" ]` sautait la
-#    comparaison, et la cible affichait « alignés » sur un dépôt divergent. Même piège
-#    côté cluster-up.sh : l'ancre `^` ratait les affectations en milieu de ligne
-#    (`CP_IP_START=… ; CP_IP_STEP=…`), donc les deux *_STEP n'étaient pas vérifiés.
-#    On accepte maintenant les deux formes, et une clé absente de lab.env.example est
-#    une ERREUR au lieu d'un silence — un garde muet est pire que pas de garde.
+# ⚠️ The two extractions below have been a NEST OF FALSE NEGATIVES. The initial version:
+#      sed -n "s/.*ENV\[\"$$k\"\][^|]*|| \([^)]*\)).*/\1/p"   <- required a ')'
+#    But the Vagrantfile writes the values in TWO forms:
+#      K8S_VERSION    = ENV["K8S_VERSION"] || "1.36.3"     (no parenthesis)
+#      CONTROL_PLANES = (ENV["CONTROL_PLANES"] || 1).to_i  (with one)
+#    So K8S_VERSION and NETWORK came out EMPTY, the `[ -n "$$vf" ]` guard skipped the
+#    comparison, and the target printed "aligned" on a diverging repo. Same trap on the
+#    cluster-up.sh side: the `^` anchor missed mid-line assignments
+#    (`CP_IP_START=… ; CP_IP_STEP=…`), so neither *_STEP was checked.
+#    We now accept both forms, and a key missing from lab.env.example is an ERROR instead
+#    of a silence — a mute guard is worse than no guard.
 #
-# `VIP` est volontairement EXCLU : c'est le seul défaut DÉRIVÉ et non littéral
-# (`"#{NETWORK}.5"` côté Ruby, `"${NETWORK}.5"` côté shell). La comparaison textuelle
-# le signalerait faussement à chaque exécution, et un garde qui crie au loup finit
-# ignoré — donc inutile. Sa cohérence est garantie autrement : les deux fichiers le
-# dérivent de `NETWORK`, qui est lui bien vérifié ici.
-validate-defaults: ## Vérifie que les défauts sont identiques dans lab.env.example, le Vagrantfile et cluster-up.sh
+# `VIP` is deliberately EXCLUDED: it is the only DERIVED, non-literal default
+# (`"#{NETWORK}.5"` on the Ruby side, `"${NETWORK}.5"` on the shell side). A textual
+# comparison would flag it falsely on every run, and a guard that cries wolf ends up
+# ignored — hence useless. Its coherence is guaranteed otherwise: both files derive it
+# from `NETWORK`, which IS checked here.
+validate-defaults: ## Check the defaults are identical in lab.env.example, the Vagrantfile and cluster-up.sh
 	@fail=0; \
 	for k in K8S_VERSION K8S_APT_MINOR CONTAINERD_SOURCE SYSTEM_UPGRADE BOX NODE_PREFIX \
 	         CLUSTER_NAME CONTROL_PLANES WORKERS CP_MEM CP_CPU WK_MEM WK_CPU \
 	         NETWORK CP_IP_START CP_IP_STEP WK_IP_START WK_IP_STEP \
 	         POD_CIDR SERVICE_CIDR CNI KUBE_PROXY_REPLACEMENT UNTAINT_CP VRRP_ROUTER_ID; do \
 	  ref="$$(sed -n "s/^$$k=//p" lab.env.example | head -n1)"; \
-	  [ -n "$$ref" ] || { echo "❌ $$k : absent de lab.env.example"; fail=1; continue; }; \
+	  [ -n "$$ref" ] || { echo "❌ $$k: missing from lab.env.example"; fail=1; continue; }; \
 	  vf="$$(sed -n "s/.*ENV\[\"$$k\"\][^|]*|| *\([^);]*\).*/\1/p" Vagrantfile | head -n1 | tr -d '\" ')"; \
 	  cu="$$(sed -n "s/.*$$k=\"\$${$$k:-\([^}]*\)}\".*/\1/p" kubeadm/cluster-up.sh | head -n1 | tr -d '\" ')"; \
 	  if [ -n "$$vf" ] && [ "$$vf" != "$$ref" ]; then \
-	    echo "❌ $$k : lab.env.example=$$ref mais Vagrantfile=$$vf"; fail=1; fi; \
+	    echo "❌ $$k: lab.env.example=$$ref but Vagrantfile=$$vf"; fail=1; fi; \
 	  if [ -n "$$cu" ] && [ "$$cu" != "$$ref" ]; then \
-	    echo "❌ $$k : lab.env.example=$$ref mais cluster-up.sh=$$cu"; fail=1; fi; \
+	    echo "❌ $$k: lab.env.example=$$ref but cluster-up.sh=$$cu"; fail=1; fi; \
 	done; \
-	[ $$fail -eq 0 ] && echo "✅ défauts : 24 clés alignées (lab.env.example / Vagrantfile / cluster-up.sh)"
+	[ $$fail -eq 0 ] && echo "✅ defaults: 24 keys aligned (lab.env.example / Vagrantfile / cluster-up.sh)"
 
-# `_k8s/` est un sous-module (k8s-playground). Deux façons de casser un clone neuf sans
-# s'en rendre compte depuis SA copie locale, où tout marche :
-#   1. épingler un commit jamais poussé — `git clone --recurse-submodules` échoue alors
-#      pour tout le monde sauf soi ;
-#   2. déclarer une URL en `git@github.com:` — le clone échoue pour quiconque n'a pas de
-#      clé SSH GitHub, alors que ce dépôt est public et invite au clone.
-# Les deux sont invisibles en local : ce test les rend visibles.
-validate-submodule: ## Vérifie que le sous-module _k8s est déclaré, public et récupérable
-	@url="$$(git config -f .gitmodules submodule._k8s.url)"; 	case "$$url" in 	  https://*) ;; 	  *) echo "❌ sous-module _k8s : URL '$$url' — attendu https:// (un clone public ne peut pas utiliser SSH)"; exit 1 ;; 	esac; 	sha="$$(git ls-files -s _k8s | awk '{print $$2}')"; 	[ -n "$$sha" ] || { echo "❌ _k8s n'est pas enregistré comme sous-module"; exit 1; }; 	tmp="$$(mktemp -d)"; trap 'rm -rf "$$tmp"' EXIT; 	git -C "$$tmp" init -q .; 	if git -C "$$tmp" fetch -q --depth 1 "$$url" "$$sha" 2>/dev/null; then 	  echo "✅ sous-module : _k8s -> $$url @ $$(echo "$$sha" | cut -c1-7) (récupérable publiquement)"; 	else 	  echo "❌ sous-module : le commit $$(echo "$$sha" | cut -c1-7) est introuvable sur $$url"; 	  echo "   -> il n'a probablement jamais été poussé. Un clone --recurse-submodules échouerait."; 	  exit 1; 	fi
+# `_k8s/` is a submodule (k8s-playground). Two ways to break a fresh clone without
+# noticing from YOUR own copy, where everything works:
+#   1. pinning a never-pushed commit — `git clone --recurse-submodules` then fails for
+#      everyone but you;
+#   2. declaring a `git@github.com:` URL — the clone fails for anyone without a GitHub SSH
+#      key, on a repo that is public and invites cloning.
+# Both are invisible locally: this test makes them visible.
+validate-submodule: ## Check the _k8s submodule is declared, public and fetchable
+	@url="$$(git config -f .gitmodules submodule._k8s.url)"; \
+	case "$$url" in \
+	  https://*) ;; \
+	  *) echo "❌ submodule _k8s: URL '$$url' — expected https:// (a public clone cannot use SSH)"; exit 1 ;; \
+	esac; \
+	sha="$$(git ls-files -s _k8s | awk '{print $$2}')"; \
+	[ -n "$$sha" ] || { echo "❌ _k8s is not registered as a submodule"; exit 1; }; \
+	tmp="$$(mktemp -d)"; trap 'rm -rf "$$tmp"' EXIT; \
+	git -C "$$tmp" init -q .; \
+	if git -C "$$tmp" fetch -q --depth 1 "$$url" "$$sha" 2>/dev/null; then \
+	  echo "✅ submodule: _k8s -> $$url @ $$(echo "$$sha" | cut -c1-7) (publicly fetchable)"; \
+	else \
+	  echo "❌ submodule: commit $$(echo "$$sha" | cut -c1-7) not found on $$url"; \
+	  echo "   -> it has most likely never been pushed. A clone --recurse-submodules would fail."; \
+	  exit 1; \
+	fi
 
-validate-docs: ## Construit la doc dans un fichier jetable et exige des liens valides
+validate-docs: ## Build the docs into a throwaway file and require valid links
 	@out="$$(mktemp -d)"; trap 'rm -rf "$$out"' EXIT; \
-	uv run docs/build.py --strict --out "$$out/index.html" >/dev/null && echo "✅ docs : liens et ancres OK"
+	uv run docs/build.py --strict --out "$$out/index.html" >/dev/null && echo "✅ docs: links and anchors OK"
 
-validate-shell: ## Vérifie la syntaxe de tous les scripts shell
+validate-shell: ## Check the syntax of every shell script
 	@fail=0; \
 	while IFS= read -r f; do \
 	  bash -n "$$f" || { echo "❌ $$f"; fail=1; }; \
 	done < <(git ls-files '*.sh'); \
-	[ $$fail -eq 0 ] && echo "✅ shell : $$(git ls-files '*.sh' | wc -l) scripts OK"
+	[ $$fail -eq 0 ] && echo "✅ shell: $$(git ls-files '*.sh' | wc -l) scripts OK"
 
-validate-yaml: ## Vérifie que tous les YAML du dépôt parsent
+validate-yaml: ## Check that every YAML in the repo parses
 	@git ls-files -z '*.yaml' '*.yml' | xargs -0 $(YAML_PY) -c 'import sys, yaml; [list(yaml.safe_load_all(open(f, encoding="utf-8"))) for f in sys.argv[1:]]' \
-	  && echo "✅ yaml : $$(git ls-files '*.yaml' '*.yml' | wc -l) fichiers OK"
+	  && echo "✅ yaml: $$(git ls-files '*.yaml' '*.yml' | wc -l) files OK"
 
-# --ignore-provider : indispensable en CI, où VirtualBox n'est pas installé (le job
-# échouerait sur le provider avant même de regarder le Vagrantfile). En local, sans le
-# drapeau, la validation couvre EN PLUS la config provider — donc on ne l'impose pas ici.
-validate-vagrant: ## Valide le Vagrantfile (VAGRANT_VALIDATE_FLAGS=--ignore-provider en CI)
+# --ignore-provider: indispensable in CI, where VirtualBox is not installed (the job would
+# fail on the provider before even looking at the Vagrantfile). Locally, without the flag,
+# the validation ALSO covers the provider config — so we do not force it here.
+validate-vagrant: ## Validate the Vagrantfile (VAGRANT_VALIDATE_FLAGS=--ignore-provider in CI)
 	@vagrant validate $(VAGRANT_VALIDATE_FLAGS) && echo "✅ Vagrantfile OK"
 
-# Rend les trois modèles kubeadm avec des valeurs factices, dans un dossier jetable,
-# puis les valide. Deux niveaux, parce que `kubeadm` n'est pas forcément installé sur
-# le poste (c'est un binaire Linux) :
-#   1. le YAML doit parser                       — toujours vérifié ;
-#   2. `kubeadm config validate` doit passer     — seulement si kubeadm est là.
-# C'est ce second niveau qui attrape les vraies erreurs de schéma v1beta4, comme un
-# `extraArgs` resté sous forme de dictionnaire (forme v1beta3).
-validate-kubeadm: ## Rend les modèles kubeadm et valide leur schéma
+# Renders the three kubeadm templates with dummy values, into a throwaway directory, then
+# validates them. Two levels, because `kubeadm` is not necessarily installed on the
+# workstation (it is a Linux binary):
+#   1. the YAML must parse                       — always checked;
+#   2. `kubeadm config validate` must pass       — only when kubeadm is there.
+# It is that second level which catches the real v1beta4 schema mistakes, such as an
+# `extraArgs` left in dictionary form (the v1beta3 shape).
+validate-kubeadm: ## Render the kubeadm templates and validate their schema
 	@out="$$(mktemp -d)"; trap 'rm -rf "$$out"' EXIT; \
 	printf '    - 192.168.56.5\n    - 127.0.0.1\n' >"$$out/certsans.txt"; \
 	for tpl in kubeadm/templates/*.yaml.tpl; do \
@@ -133,25 +148,25 @@ validate-kubeadm: ## Rend les modèles kubeadm et valide leur schéma
 	$(YAML_PY) -c 'import sys, yaml; [list(yaml.safe_load_all(open(f, encoding="utf-8"))) for f in sys.argv[1:]]' "$$out"/*.yaml; \
 	if command -v kubeadm >/dev/null 2>&1; then \
 	  for f in "$$out"/*.yaml; do kubeadm config validate --config "$$f" >/dev/null || exit 1; done; \
-	  echo "✅ kubeadm : 3 modèles rendus, YAML + schéma v1beta4 OK"; \
+	  echo "✅ kubeadm: 3 templates rendered, YAML + v1beta4 schema OK"; \
 	else \
-	  echo "✅ kubeadm : 3 modèles rendus, YAML OK  (schéma non vérifié : kubeadm absent du PATH)"; \
+	  echo "✅ kubeadm: 3 templates rendered, YAML OK  (schema not checked: kubeadm absent from PATH)"; \
 	fi
 
-# Un sous-module enregistre TOUJOURS un commit précis dans le dépôt parent — c'est ainsi
-# que git garantit qu'un clone donne exactement le même arbre. « Suivre main » se déclare
-# donc dans .gitmodules (`branch = main`) et se matérialise par `--remote`, qui va chercher
-# la pointe de cette branche et met à jour le pointeur enregistré.
-k8s-update: ## Aligne le sous-module _k8s sur la pointe de main (puis committer le pointeur)
+# A submodule ALWAYS records a precise commit in the parent repo — that is how git
+# guarantees a clone gives exactly the same tree. "Follow main" is therefore declared in
+# .gitmodules (`branch = main`) and materialised by `--remote`, which fetches the tip of
+# that branch and updates the recorded pointer.
+k8s-update: ## Align the _k8s submodule on the tip of main (then commit the pointer)
 	@git submodule update --remote --init _k8s
 	@if git diff --quiet -- _k8s; then \
-	  echo "✅ _k8s déjà sur la pointe de main ($$(git -C _k8s rev-parse --short HEAD))"; \
+	  echo "✅ _k8s already on the tip of main ($$(git -C _k8s rev-parse --short HEAD))"; \
 	else \
 	  echo "⬆️  _k8s -> $$(git -C _k8s rev-parse --short HEAD)"; \
 	  git -C _k8s log --oneline -5; \
-	  echo; echo "   Pointeur mis à jour dans l'arbre de travail. Pour le figer :"; \
+	  echo; echo "   Pointer updated in the working tree. To freeze it:"; \
 	  echo "     git add _k8s && git commit -m '[Claude] chore: bump _k8s'"; \
 	fi
 
-clean: ## Supprime la doc générée
-	@rm -f $(DOCS_OUT) && echo "docs/index.html supprimé"
+clean: ## Remove the generated documentation
+	@rm -f $(DOCS_OUT) && echo "docs/index.html removed"

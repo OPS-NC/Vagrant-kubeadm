@@ -70,8 +70,8 @@ LoadBalancer pool), so nothing works until VirtualBox accepts it.
 ### `vagrant up` refuses to start on an even number of control planes
 
 ```
-Vagrant-KubeADM : CONTROL_PLANES=2 est PAIR — etcd exige un nombre impair pour tenir
-un quorum utile (1, 3, 5). Avec 2 membres, la perte d'un seul node fige l'API.
+Vagrant-KubeADM: CONTROL_PLANES=2 is EVEN — etcd requires an odd number to hold a
+useful quorum (1, 3, 5). With 2 members, losing a single node freezes the API.
 ```
 
 **This is a guard rail, not a bug.** etcd holds quorum at `(n/2)+1`: two members tolerate
@@ -149,11 +149,11 @@ LAB_DIR=/path/to/Vagrant-kubeadm ./_k8s/platform-up.sh
 
 ## 🌐 2. The API VIP and keepalived
 
-### `cluster-up.sh` fails on "l'apiserver ne répond pas sur la VIP"
+### `cluster-up.sh` fails on "the apiserver does not answer on the VIP"
 
 ```
-    - attente de https://192.168.56.5:6443 ......................... ÉCHEC (600s)
-ERREUR : l'apiserver ne répond pas sur la VIP 192.168.56.5 après 600s.
+    - waiting for https://192.168.56.5:6443 ....................... FAILED (600s)
+ERROR: the apiserver does not answer on the VIP 192.168.56.5 after 600s.
 ```
 
 `kubeadm init` has already run at that point: the script is waiting for `/readyz` **through the
@@ -397,7 +397,7 @@ tls: failed to verify certificate: x509: certificate is valid for 10.96.0.1, 192
 ```
 
 **Symptom.** `kubeadm init` succeeds, the join command is printed, then `cluster-up.sh` dies on
-*« impossible d'extraire les éléments de jonction »*.
+*"unable to extract the join material"*.
 
 **Cause.** `kubeadm init phase upload-certs` builds its API client from
 `InitConfiguration.LocalAPIEndpoint.AdvertiseAddress` — **not** from `controlPlaneEndpoint`, and
@@ -506,7 +506,7 @@ vagrant ssh k8s-w1 -c "ls -la /etc/cni/net.d/"
 ```
 
 Anything non-empty on a supposedly reset node means the cleanup did not complete — the script
-prints `reset partiel sur <node> — poursuite` and carries on rather than stopping. Re-run it on
+prints `partial reset on <node> — carrying on` and carries on rather than stopping. Re-run it on
 that node alone:
 
 ```bash

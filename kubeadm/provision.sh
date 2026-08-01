@@ -1,41 +1,41 @@
 #!/usr/bin/env bash
 #
-# provision.sh — préparation système d'un node, exécutée DANS la VM par Vagrant
-# (cf. `node.vm.provision "shell"` du Vagrantfile). Ne bootstrape AUCUN cluster :
-# à la fin de `vagrant up`, chaque VM est prête à recevoir un `kubeadm init/join`,
-# et rien de plus. Le bootstrap est piloté depuis l'hôte par kubeadm/cluster-up.sh.
+# provision.sh — system preparation of a node, run INSIDE the VM by Vagrant
+# (see `node.vm.provision "shell"` in the Vagrantfile). Bootstraps NO cluster:
+# at the end of `vagrant up`, every VM is ready to receive a `kubeadm init/join`,
+# and nothing more. The bootstrap is driven from the host by kubeadm/cluster-up.sh.
 #
-# Ce que ce script pose, dans l'ordre (chaque étape suppose la précédente) :
-#   1. /etc/hosts        résolution déterministe de tous les nodes du lab
-#   2. mise à jour       apt upgrade non interactif, GRUB préconfiguré (cf. étape 2)
-#   3. prérequis noyau   swap coupé, modules, sysctl
-#   4. paquets de base   dont open-iscsi/nfs-common (Longhorn) et conntrack (kube-proxy)
-#   5. containerd        2.x (dépôt Docker) ou 1.7 (Debian), cgroup systemd
-#   6. kubeadm/kubelet/kubectl  version épinglée puis `apt-mark hold`
-#   7. images            pré-tirées, pour que `kubeadm init` ne télécharge plus rien
-#   8. keepalived        VIP de l'API en VRRP — control planes uniquement
+# What this script lays down, in order (each step assumes the previous one):
+#   1. /etc/hosts        deterministic resolution of every node of the lab
+#   2. system upgrade    non-interactive apt upgrade, GRUB preseeded (see step 2)
+#   3. kernel prereqs    swap off, modules, sysctl
+#   4. base packages     including open-iscsi/nfs-common (Longhorn) and conntrack (kube-proxy)
+#   5. containerd        2.x (Docker repo) or 1.7 (Debian), systemd cgroup
+#   6. kubeadm/kubelet/kubectl  pinned version then `apt-mark hold`
+#   7. images            pre-pulled, so that `kubeadm init` downloads nothing
+#   8. keepalived        API VIP over VRRP — control planes only
 #
-# Idempotent : relançable à volonté (`vagrant provision`).
+# Idempotent: re-runnable at will (`vagrant provision`).
 #
-# ⚠️ `vagrant provision` N'EST PAS un chemin de montée de version Kubernetes : l'étape 6
-#    réinstalle K8S_VERSION sur TOUS les nodes d'un coup, sans jamais appeler
-#    `kubeadm upgrade`. Bumper lab.env puis reprovisionner mettrait chaque kubelet une
-#    mineure devant l'apiserver. Cf. kubeadm/UPGRADE.md.
+# ⚠️ `vagrant provision` IS NOT a Kubernetes upgrade path: step 6 reinstalls
+#    K8S_VERSION on ALL nodes at once, without ever calling `kubeadm upgrade`.
+#    Bumping lab.env then re-provisioning would put every kubelet one minor ahead of
+#    the apiserver. See kubeadm/UPGRADE.md.
 #
-# Variables reçues du Vagrantfile : NODE_NAME NODE_ROLE NODE_INDEX NODE_IP NETWORK
+# Variables received from the Vagrantfile: NODE_NAME NODE_ROLE NODE_INDEX NODE_IP NETWORK
 # VIP CP_IPS CP_IP_START CP_IP_STEP VRRP_ROUTER_ID K8S_VERSION K8S_APT_MINOR CONTAINERD_SOURCE
 # REGISTRY_MIRROR HOSTS_ENTRIES SYSTEM_UPGRADE KUBE_PROXY_REPLACEMENT
 set -euo pipefail
 
-# --- Non-interactivité : ceinture ET bretelles ------------------------------
-# Un provisionneur Vagrant n'a PAS de terminal. La moindre question debconf ne
-# s'affiche donc nulle part : elle bloque `vagrant up` jusqu'au timeout, sans le
-# moindre indice de ce qui est attendu. Les trois réglages ne font pas doublon :
-#   DEBIAN_FRONTEND=noninteractive  debconf ne pose plus de question et prend le défaut
-#   DEBIAN_PRIORITY=critical        même les questions « haute priorité » sont sautées
-#   NEEDRESTART_MODE=a              needrestart redémarre les services sans demander
-#                                   (il est tiré par plusieurs paquets sur Debian 13 et
-#                                   sa liste de services à redémarrer est un prompt)
+# --- Non-interactivity: belt AND braces --------------------------------------
+# A Vagrant provisioner has NO terminal. So the slightest debconf question shows up
+# nowhere: it blocks `vagrant up` until the timeout, without the faintest hint of what
+# is expected. The three settings are not redundant:
+#   DEBIAN_FRONTEND=noninteractive  debconf stops asking and takes the default
+#   DEBIAN_PRIORITY=critical        even "high priority" questions are skipped
+#   NEEDRESTART_MODE=a              needrestart restarts services without asking
+#                                   (it is pulled in by several packages on Debian 13 and
+#                                   its list of services to restart is a prompt)
 export DEBIAN_FRONTEND=noninteractive
 export DEBIAN_PRIORITY=critical
 export NEEDRESTART_MODE=a
@@ -44,7 +44,7 @@ export NEEDRESTART_SUSPEND=1
 NODE_NAME="${NODE_NAME:-$(hostname)}"
 NODE_ROLE="${NODE_ROLE:-worker}"
 NODE_INDEX="${NODE_INDEX:-1}"
-NODE_IP="${NODE_IP:?NODE_IP manquant (fourni par le Vagrantfile)}"
+NODE_IP="${NODE_IP:?NODE_IP missing (provided by the Vagrantfile)}"
 NETWORK="${NETWORK:-192.168.56}"
 VIP="${VIP:-${NETWORK}.5}"
 CP_IPS="${CP_IPS:-}"
@@ -59,24 +59,24 @@ HOSTS_ENTRIES="${HOSTS_ENTRIES:-}"
 SYSTEM_UPGRADE="${SYSTEM_UPGRADE:-true}"
 KUBE_PROXY_REPLACEMENT="${KUBE_PROXY_REPLACEMENT:-true}"
 
-# Normalisation + REJET de l'inconnu, comme SELF_SIGNED et UNTAINT_CP ailleurs dans le
-# dépôt. Sans ce `case`, `SYSTEM_UPGRADE=True` ou `yes` sauterait SILENCIEUSEMENT la
-# mise à jour — et une faute de frappe (`flase`) ferait la même chose, sans un mot.
+# Normalisation + REJECTION of the unknown, like SELF_SIGNED and UNTAINT_CP elsewhere in
+# the repo. Without this `case`, `SYSTEM_UPGRADE=True` or `yes` would SILENTLY skip the
+# upgrade — and a typo (`flase`) would do the same, without a word.
 for v in SYSTEM_UPGRADE KUBE_PROXY_REPLACEMENT; do
   eval "val=\${$v}"
   val="$(printf '%s' "$val" | tr '[:upper:]' '[:lower:]')"
   case "$val" in
     true|false) eval "$v=\$val" ;;
-    *) echo "ERREUR : ${v}='${val}' inconnu (true|false)." >&2 ; exit 1 ;;
+    *) echo "ERROR: ${v}='${val}' unknown (true|false)." >&2 ; exit 1 ;;
   esac
 done
 
 log() { printf '\n\033[1;36m[%s] ==> %s\033[0m\n' "$NODE_NAME" "$*"; }
 
 # ============================================================================
-log "[1/8] Résolution des noms (/etc/hosts)"
-# Bloc délimité et réécrit à chaque passage : relancer `vagrant provision` ne doit
-# pas empiler dix fois les mêmes lignes.
+log "[1/8] Name resolution (/etc/hosts)"
+# A delimited block, rewritten on every pass: re-running `vagrant provision` must not
+# stack the same lines ten times over.
 if [ -n "$HOSTS_ENTRIES" ]; then
   sed -i '/# >>> vagrant-kubeadm/,/# <<< vagrant-kubeadm/d' /etc/hosts
   {
@@ -86,33 +86,33 @@ if [ -n "$HOSTS_ENTRIES" ]; then
     echo "# <<< vagrant-kubeadm"
   } >>/etc/hosts
 fi
-# Debian mappe le hostname sur 127.0.1.1. kubelet résout son propre nom pour
-# s'enregistrer : laissé en place, le node s'annonce en loopback et devient
-# injoignable depuis les autres nodes.
+# Debian maps the hostname onto 127.0.1.1. The kubelet resolves its own name to
+# register itself: left in place, the node advertises a loopback address and becomes
+# unreachable from the other nodes.
 sed -i "/^127\.0\.1\.1\s\+${NODE_NAME}\b/d" /etc/hosts
 
 # ============================================================================
 if [ "$SYSTEM_UPGRADE" = "true" ]; then
-log "[2/8] Mise à jour du système (non interactive, GRUB préconfiguré)"
+log "[2/8] System upgrade (non-interactive, GRUB preseeded)"
 
-# --- LE PIÈGE : grub-pc et sa question debconf --------------------------------
-# `apt-get upgrade` sur une box Debian met tôt ou tard `grub-pc` à jour. Son postinst
-# pose alors une question debconf `grub-pc/install_devices` — « sur quel(s) disque(s)
-# installer GRUB ? » — parce que la réponse n'est pas déductible : GRUB doit être écrit
-# dans le MBR d'un disque physique, et le paquet ne peut pas le deviner.
+# --- THE TRAP: grub-pc and its debconf question -------------------------------
+# `apt-get upgrade` on a Debian box sooner or later upgrades `grub-pc`. Its postinst then
+# asks a debconf question `grub-pc/install_devices` — "on which disk(s) should GRUB be
+# installed?" — because the answer cannot be deduced: GRUB has to be written into the MBR
+# of a physical disk, and the package cannot guess it.
 #
-# Dans un provisionneur Vagrant il n'y a AUCUN terminal : la question ne s'affiche nulle
-# part et `vagrant up` reste bloqué jusqu'au timeout. Pire, si elle est sautée sans
-# réponse, GRUB n'est pas réécrit dans le MBR et la VM peut ne plus démarrer au reboot
-# suivant — panne qui se manifeste bien après le provisioning, donc très loin de sa cause.
+# In a Vagrant provisioner there is NO terminal: the question shows up nowhere and
+# `vagrant up` stays blocked until the timeout. Worse, if it is skipped without an answer,
+# GRUB is not rewritten into the MBR and the VM may fail to boot at the next reboot — a
+# failure that shows up long after provisioning, hence very far from its cause.
 #
-# On préconfigure donc la réponse AVANT toute mise à jour. C'est `debconf-set-selections`
-# qui pose la réponse dans la base debconf ; le postinst la lira au lieu de demander.
+# So we preseed the answer BEFORE any upgrade. `debconf-set-selections` is what puts the
+# answer into the debconf database; the postinst reads it instead of asking.
 
-# Le disque n'est pas codé en dur : on remonte du système de fichiers racine vers le
-# disque parent. `/dev/sda` est le cas VirtualBox habituel, mais ce n'est qu'un repli —
-# un provider différent (libvirt -> /dev/vda) ou un ordre de contrôleurs inattendu
-# donnerait un autre nom, et une valeur fausse ici est exactement ce qu'on veut éviter.
+# The disk is not hard-coded: we walk up from the root filesystem to the parent disk.
+# `/dev/sda` is the usual VirtualBox case, but it is only a fallback — a different
+# provider (libvirt -> /dev/vda) or an unexpected controller order would give another
+# name, and a wrong value here is exactly what we want to avoid.
 root_src="$(findmnt -no SOURCE / 2>/dev/null || true)"
 boot_disk=""
 if [ -n "$root_src" ]; then
@@ -122,12 +122,12 @@ fi
 boot_disk="${boot_disk:-/dev/sda}"
 
 if [ -d /sys/firmware/efi ]; then
-  # En UEFI c'est `grub-efi` qui est installé : il écrit dans la partition ESP et ne
-  # pose jamais `install_devices`. On préconfigure quand même — sans effet ici, mais
-  # correct si la box bascule un jour en BIOS.
-  echo "    démarrage UEFI détecté (grub-efi) — pas de question install_devices"
+  # Under UEFI it is `grub-efi` that is installed: it writes into the ESP partition and
+  # never asks `install_devices`. We preseed anyway — no effect here, but correct if the
+  # box ever switches to BIOS.
+  echo "    UEFI boot detected (grub-efi) — no install_devices question"
 else
-  echo "    démarrage BIOS — GRUB sera installé sur ${boot_disk}"
+  echo "    BIOS boot — GRUB will be installed on ${boot_disk}"
 fi
 
 debconf-set-selections <<EOF
@@ -139,14 +139,14 @@ EOF
 
 apt-get update -qq
 
-# `upgrade` et surtout PAS `full-upgrade`/`dist-upgrade` : `upgrade` ne peut pas
-# installer un paquet au nom nouveau, donc il laisse volontairement de côté les
-# montées de noyau (linux-image-6.12.x est un NOUVEAU nom de paquet). C'est exactement
-# ce qu'on veut : on met le système à jour sans changer le noyau sous les pieds des
-# modules chargés à l'étape suivante (br_netfilter, iscsi_tcp), et sans imposer un reboot.
+# `upgrade` and definitely NOT `full-upgrade`/`dist-upgrade`: `upgrade` cannot install a
+# package under a new name, so it deliberately leaves kernel bumps aside
+# (linux-image-6.12.x is a NEW package name). That is exactly what we want: we upgrade the
+# system without changing the kernel under the feet of the modules loaded in the next step
+# (br_netfilter, iscsi_tcp), and without forcing a reboot.
 #
-# --force-confdef + --force-confold : garder les fichiers de configuration en place
-# sans poser la question « garder la version installée ou celle du mainteneur ? ».
+# --force-confdef + --force-confold: keep the configuration files in place without asking
+# "keep the installed version or the maintainer's one?".
 apt-get -y \
   -o Dpkg::Options::="--force-confdef" \
   -o Dpkg::Options::="--force-confold" \
@@ -154,49 +154,49 @@ apt-get -y \
 
 apt-get -y -qq autoremove
 else
-log "[2/8] Mise à jour du système — ignorée (SYSTEM_UPGRADE=${SYSTEM_UPGRADE})"
+log "[2/8] System upgrade — skipped (SYSTEM_UPGRADE=${SYSTEM_UPGRADE})"
 apt-get update -qq
 fi
 
 # ============================================================================
-log "[3/8] Prérequis noyau (swap, modules, sysctl)"
+log "[3/8] Kernel prerequisites (swap, modules, sysctl)"
 
 # --- swap ---
-# NodeSwap est GA depuis 1.34, mais `failSwapOn` vaut TOUJOURS true par défaut :
-# le kubelet refuse de démarrer avec du swap actif tant qu'on ne le configure pas
-# explicitement. Sur un lab, on coupe — c'est le chemin le plus court et le mieux testé.
+# NodeSwap has been GA since 1.34, but `failSwapOn` STILL defaults to true: the kubelet
+# refuses to start with swap enabled until it is configured explicitly. On a lab we turn
+# it off — the shortest and best-tested path.
 swapoff -a
 sed -ri 's/^\s*([^#].*\s+swap\s+)/#\1/' /etc/fstab
-# Debian 13 peut fournir le swap par une unité systemd (zram, swapfile) que
-# /etc/fstab ne décrit pas : la masquer évite qu'il revienne au reboot.
-# `|| true` sur TOUT le pipeline : sans unité de swap, systemctl sort en 1 et,
-# sous `set -e` + `pipefail`, tuerait la préparation du node dès l'étape 2.
+# Debian 13 may provide swap through a systemd unit (zram, swapfile) that /etc/fstab does
+# not describe: masking it prevents it from coming back at reboot.
+# `|| true` on the WHOLE pipeline: with no swap unit, systemctl exits 1 and, under
+# `set -e` + `pipefail`, would kill the node preparation as early as step 2.
 { systemctl list-unit-files --type=swap --no-legend 2>/dev/null || true; } \
   | awk '{print $1}' | while read -r unit; do
       [ -n "$unit" ] && systemctl mask "$unit" >/dev/null 2>&1 || true
     done
 
 # --- modules ---
-# `overlay` est de toute façon chargé par le snapshotter de containerd, et Cilium en
-# mode eBPF n'a pas besoin de `br_netfilter`. On les charge quand même : ils sont
-# indispensables dès qu'on bascule sur calico/flannel (datapath iptables), et le lab
-# doit rester utilisable avec les quatre valeurs de CNI.
+# `overlay` is loaded by containerd's snapshotter anyway, and Cilium in eBPF mode does not
+# need `br_netfilter`. We load them regardless: they are indispensable as soon as one
+# switches to calico/flannel (iptables datapath), and the lab must stay usable with all
+# four CNI values.
 tee /etc/modules-load.d/k8s.conf >/dev/null <<'EOF'
 overlay
 br_netfilter
 EOF
 modprobe overlay    || true
 modprobe br_netfilter || true
-# iSCSI : requis par Longhorn (_k8s/longhorn/). Sans lui les pods CSI tournent en boucle.
+# iSCSI: required by Longhorn (_k8s/longhorn/). Without it the CSI pods loop forever.
 tee /etc/modules-load.d/iscsi.conf >/dev/null <<'EOF'
 iscsi_tcp
 EOF
 modprobe iscsi_tcp || true
 
 # --- sysctl ---
-# La doc amont ne réclame plus que `ip_forward` et délègue le reste au CNI. Les
-# `bridge-nf-call-*` restent nécessaires aux datapaths iptables (calico/flannel).
-# `rp_filter=0` : le filtrage de chemin inverse casse le trafic pod chez plusieurs CNI.
+# Upstream docs now only require `ip_forward` and delegate the rest to the CNI. The
+# `bridge-nf-call-*` keys stay necessary for iptables datapaths (calico/flannel).
+# `rp_filter=0`: reverse path filtering breaks pod traffic on several CNIs.
 tee /etc/sysctl.d/99-kubernetes.conf >/dev/null <<'EOF'
 net.ipv4.ip_forward                 = 1
 net.bridge.bridge-nf-call-iptables  = 1
@@ -207,37 +207,37 @@ EOF
 sysctl --system >/dev/null
 
 # ============================================================================
-log "[4/8] Paquets de base"
-# Pas de `apt-get update` ici : l'étape 2 vient de le faire, dans les deux branches
-# (avec ou sans mise à jour du système). Le refaire ne coûterait que du temps de boot.
-# conntrack + socat + ethtool : exigés par le preflight kubeadm et par kube-proxy.
-# open-iscsi + nfs-common : prérequis Longhorn (_k8s/longhorn/).
-# Sur Talos ces deux-là passaient par une extension système cuite dans l'image ;
-# sur Debian c'est un simple paquet — c'est toute la différence de modèle.
+log "[4/8] Base packages"
+# No `apt-get update` here: step 2 just did it, in both branches (with or without the
+# system upgrade). Doing it again would only cost boot time.
+# conntrack + socat + ethtool: required by the kubeadm preflight and by kube-proxy.
+# open-iscsi + nfs-common: Longhorn prerequisites (_k8s/longhorn/).
+# On Talos those two came through a system extension baked into the image;
+# on Debian it is a plain package — that is the whole difference in model.
 apt-get install -y -qq \
   apt-transport-https ca-certificates curl gnupg gpg \
   conntrack socat ethtool iptables jq \
   open-iscsi nfs-common
 install -m 0755 -d /etc/apt/keyrings
 
-# keepalived UNIQUEMENT sur les control planes : le paquet Debian active son unité à
-# l'installation, et sur un worker — qui n'aura jamais de keepalived.conf — elle
-# échouerait en boucle, polluant les journaux pour rien.
+# keepalived ONLY on the control planes: the Debian package enables its unit at install
+# time, and on a worker — which will never have a keepalived.conf — it would fail in a
+# loop, polluting the journals for nothing.
 if [ "$NODE_ROLE" = "controlplane" ]; then
   apt-get install -y -qq keepalived
 fi
 
-# iscsid doit tourner ET démarrer au boot pour Longhorn.
+# iscsid must run AND start at boot for Longhorn.
 systemctl enable --now iscsid >/dev/null 2>&1 || true
 
 # ============================================================================
-log "[5/8] containerd (source : ${CONTAINERD_SOURCE})"
+log "[5/8] containerd (source: ${CONTAINERD_SOURCE})"
 case "$CONTAINERD_SOURCE" in
   docker)
-    # containerd 2.x. Seule la branche 2.x implémente la méthode CRI `RuntimeConfig`
-    # dont kubeadm se sert pour lire le cgroup driver du runtime. En 1.36 son absence
-    # n'est qu'un avertissement de preflight, mais le repli disparaît en 1.37 : la
-    # branche 1.7 de Debian est une impasse (containerd#11346 fermé sans merge).
+    # containerd 2.x. Only the 2.x branch implements the CRI `RuntimeConfig` method that
+    # kubeadm uses to read the runtime's cgroup driver. On 1.36 its absence is only a
+    # preflight warning, but the fallback disappears in 1.37: Debian's 1.7 branch is a
+    # dead end (containerd#11346 closed without a merge).
     if [ ! -f /etc/apt/keyrings/docker.gpg ]; then
       curl -fsSL https://download.docker.com/linux/debian/gpg \
         | gpg --batch --yes --dearmor -o /etc/apt/keyrings/docker.gpg
@@ -253,15 +253,15 @@ https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_C
     apt-get install -y -qq containerd containernetworking-plugins
     ;;
   *)
-    echo "ERREUR : CONTAINERD_SOURCE='${CONTAINERD_SOURCE}' inconnu (docker|debian)." >&2
+    echo "ERROR: CONTAINERD_SOURCE='${CONTAINERD_SOURCE}' unknown (docker|debian)." >&2
     exit 1
     ;;
 esac
 
 # ============================================================================
-log "[6/8] kubelet / kubeadm / kubectl ${K8S_VERSION} (dépôt ${K8S_APT_MINOR})"
-# kubernetes.io ne publie que la forme `.list` classique (pas de deb822) : c'est
-# celle qui est testée en amont, on ne s'en écarte pas.
+log "[6/8] kubelet / kubeadm / kubectl ${K8S_VERSION} (repo ${K8S_APT_MINOR})"
+# kubernetes.io only publishes the classic `.list` form (no deb822): that is the one
+# tested upstream, so we do not deviate from it.
 if [ ! -f /etc/apt/keyrings/kubernetes-apt-keyring.gpg ]; then
   curl -fsSL "https://pkgs.k8s.io/core:/stable:/${K8S_APT_MINOR}/deb/Release.key" \
     | gpg --batch --yes --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
@@ -272,41 +272,40 @@ https://pkgs.k8s.io/core:/stable:/${K8S_APT_MINOR}/deb/ /" \
   >/etc/apt/sources.list.d/kubernetes.list
 apt-get update -qq
 
-# Le suffixe de révision Debian n'est pas toujours `-1.1` (1.36.2 a été republié en
-# `-2.1`) : on demande donc `<version>-*` plutôt qu'un suffixe deviné. Le `hold` est
-# levé le temps de l'installation, sans quoi une réinstallation serait ignorée.
+# The Debian revision suffix is not always `-1.1` (1.36.2 was republished as `-2.1`): so
+# we ask for `<version>-*` rather than a guessed suffix. The `hold` is lifted for the
+# duration of the install, otherwise a reinstall would be ignored.
 apt-mark unhold kubelet kubeadm kubectl >/dev/null 2>&1 || true
 apt-get install -y -qq --allow-change-held-packages \
   "kubelet=${K8S_VERSION}-*" "kubeadm=${K8S_VERSION}-*" "kubectl=${K8S_VERSION}-*"
-# `hold` : une montée de version doit être un geste DÉLIBÉRÉ (cf. kubeadm/UPGRADE.md),
-# jamais l'effet de bord d'un `apt upgrade` qui casserait le skew kubelet/apiserver.
+# `hold`: an upgrade must be a DELIBERATE act (see kubeadm/UPGRADE.md), never the side
+# effect of an `apt upgrade` that would break the kubelet/apiserver skew.
 apt-mark hold kubelet kubeadm kubectl >/dev/null
 systemctl enable kubelet >/dev/null 2>&1 || true
 
-# --- Configuration containerd, maintenant que kubeadm peut nous dire quelle pause ---
-# On INTERROGE kubeadm au lieu de coder la version en dur : le tag de `pause` change à
-# chaque mineure, et un décalage entre celui de containerd et celui qu'attend kubeadm
-# fait pré-tirer une image pour en utiliser une autre (invisible en ligne, fatal hors-ligne).
+# --- containerd configuration, now that kubeadm can tell us which pause to use ---
+# We ASK kubeadm instead of hard-coding the version: the `pause` tag changes with every
+# minor, and a mismatch between containerd's and the one kubeadm expects pre-pulls one
+# image and uses another (invisible online, fatal offline).
 PAUSE_IMAGE="$(kubeadm config images list --kubernetes-version "v${K8S_VERSION}" 2>/dev/null \
                 | grep -m1 '/pause:' || true)"
 PAUSE_IMAGE="${PAUSE_IMAGE:-registry.k8s.io/pause:3.10.2}"
 
 mkdir -p /etc/containerd
-# Config régénérée à chaque passage : la version du fichier (v2 chez containerd 1.7,
-# v3 chez 2.x) doit suivre le binaire réellement installé, pas un ancien fichier.
+# Config regenerated on every pass: the file's version (v2 on containerd 1.7, v3 on 2.x)
+# must follow the binary actually installed, not an older file.
 containerd config default >/etc/containerd/config.toml
 
-# `SystemdCgroup` : Debian 13 est en cgroup v2 avec systemd comme gestionnaire. Si
-# containerd reste sur `cgroupfs`, deux gestionnaires se disputent la même hiérarchie
-# et les nodes deviennent instables sous charge. Le nom de la clé est identique en v2
-# et en v3, un seul `sed` couvre les deux.
+# `SystemdCgroup`: Debian 13 runs cgroup v2 with systemd as the manager. If containerd
+# stays on `cgroupfs`, two managers fight over the same hierarchy and the nodes become
+# unstable under load. The key name is identical in v2 and v3, a single `sed` covers both.
 sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
 
-# Image `pause`. La clé a changé de nom ET d'emplacement entre les deux formats :
-#   v2 (containerd 1.7) : sandbox_image = "..."  sous [plugins."io.containerd.grpc.v1.cri"]
-#   v3 (containerd 2.x) : sandbox = '...'        sous [plugins.'io.containerd.cri.v1.images'.pinned_images]
-# C'est LE piège de la migration 1.7 -> 2.x : une config recopiée telle quelle perd
-# silencieusement le réglage.
+# The `pause` image. The key changed name AND location between the two formats:
+#   v2 (containerd 1.7): sandbox_image = "..."  under [plugins."io.containerd.grpc.v1.cri"]
+#   v3 (containerd 2.x): sandbox = '...'        under [plugins.'io.containerd.cri.v1.images'.pinned_images]
+# This is THE trap of the 1.7 -> 2.x migration: a config copied as-is silently loses the
+# setting.
 if grep -q '^[[:space:]]*sandbox_image[[:space:]]*=' /etc/containerd/config.toml; then
   sed -i "s#^\([[:space:]]*sandbox_image[[:space:]]*=[[:space:]]*\).*#\1\"${PAUSE_IMAGE}\"#" \
     /etc/containerd/config.toml
@@ -316,15 +315,15 @@ if grep -q "^[[:space:]]*sandbox[[:space:]]*=" /etc/containerd/config.toml; then
     /etc/containerd/config.toml
 fi
 
-# Miroir de registry (proxy pull-through). `config_path` est le seul réglage vide par
-# défaut dans la config générée, en v2 comme en v3 : on le remplit sans dépendre du
-# nom du plugin, qui a été renommé entre les deux formats.
+# Registry mirror (pull-through proxy). `config_path` is the only setting left empty in
+# the generated config, in v2 as in v3: we fill it without depending on the plugin name,
+# which was renamed between the two formats.
 if [ -n "$REGISTRY_MIRROR" ]; then
   sed -i "s#^\([[:space:]]*config_path[[:space:]]*=[[:space:]]*\)\(\"\"\|''\)#\1\"/etc/containerd/certs.d\"#" \
     /etc/containerd/config.toml
   mkdir -p /etc/containerd/certs.d/docker.io
-  # `override_path` : le miroir est exposé sous un sous-chemin, qu'il faut traiter
-  # comme la base de l'API du registry (sinon containerd y recolle un /v2 en double).
+  # `override_path`: the mirror is exposed under a sub-path, which has to be treated as
+  # the base of the registry API (otherwise containerd appends a second /v2 to it).
   tee /etc/containerd/certs.d/docker.io/hosts.toml >/dev/null <<EOF
 server = "https://registry-1.docker.io"
 
@@ -338,8 +337,8 @@ systemctl daemon-reload
 systemctl enable containerd >/dev/null 2>&1 || true
 systemctl restart containerd
 
-# crictl parle au même socket que le kubelet. Sans ce fichier, `crictl` part chercher
-# dockershim et affiche des erreurs déroutantes lors des diagnostics.
+# crictl talks to the same socket as the kubelet. Without this file, `crictl` goes looking
+# for dockershim and prints confusing errors during diagnostics.
 tee /etc/crictl.yaml >/dev/null <<'EOF'
 runtime-endpoint: unix:///run/containerd/containerd.sock
 image-endpoint: unix:///run/containerd/containerd.sock
@@ -347,18 +346,18 @@ timeout: 10
 EOF
 
 # ============================================================================
-log "[7/8] Pré-tirage des images"
-# Fait ici, PENDANT `vagrant up`, donc en parallèle sur toutes les VM. `kubeadm init`
-# n'a alors plus rien à télécharger, ce qui retire la plus grosse source de timeouts
-# du bootstrap (et rend le lab reconstructible hors-ligne).
+log "[7/8] Pre-pulling the images"
+# Done here, DURING `vagrant up`, hence in parallel on every VM. `kubeadm init` then has
+# nothing left to download, which removes the biggest source of bootstrap timeouts (and
+# makes the lab rebuildable offline).
 if [ "$NODE_ROLE" = "controlplane" ]; then
   kubeadm config images pull --kubernetes-version "v${K8S_VERSION}" >/dev/null 2>&1 \
-    || echo "    (pré-tirage partiel — kubeadm init retéléchargera au besoin)"
+    || echo "    (partial pre-pull — kubeadm init will re-download as needed)"
 else
-  # Un worker n'héberge ni apiserver, ni etcd, ni scheduler : tirer les 7 images
-  # gâcherait ~500 Mio par worker. `pause` lui sert toujours ; `kube-proxy` seulement
-  # s'il est réellement installé — avec KUBE_PROXY_REPLACEMENT=true (le défaut du
-  # dépôt) cluster-up.sh saute `addon/kube-proxy` et l'image ne servirait JAMAIS.
+  # A worker hosts neither apiserver, nor etcd, nor scheduler: pulling the 7 images would
+  # waste ~500 MiB per worker. `pause` is still useful to it; `kube-proxy` only if it is
+  # really installed — with KUBE_PROXY_REPLACEMENT=true (the repo default) cluster-up.sh
+  # skips `addon/kube-proxy` and the image would NEVER be used.
   images="$PAUSE_IMAGE"
   [ "$KUBE_PROXY_REPLACEMENT" != "true" ] && images="$images registry.k8s.io/kube-proxy:v${K8S_VERSION}"
   for img in $images; do
@@ -367,9 +366,9 @@ else
 fi
 
 # ============================================================================
-# Détection de l'interface host-only. JAMAIS de nom codé en dur : Debian 13 utilise
-# les noms prédictibles (`enp0s8`), mais certaines box exposent encore `eth1`. On
-# cherche l'interface qui PORTE l'IP du node — infaillible et indépendant du nommage.
+# Host-only interface detection. NEVER a hard-coded name: Debian 13 uses predictable
+# names (`enp0s8`), but some boxes still expose `eth1`. We look for the interface that
+# CARRIES the node's IP — infallible and independent of the naming scheme.
 HOSTONLY_IF="$(ip -o -4 addr show 2>/dev/null \
                 | awk -v pfx="${NODE_IP}/" '$4 ~ ("^" pfx) {print $2; exit}')"
 if [ -z "$HOSTONLY_IF" ]; then
@@ -378,8 +377,8 @@ if [ -z "$HOSTONLY_IF" ]; then
 fi
 HOSTONLY_IF="${HOSTONLY_IF:-eth1}"
 
-# Fiches de faits du node, relues par cluster-up.sh (via `vagrant ssh`) et par les
-# scripts _k8s/ qui ont besoin du nom d'interface (annonce L2 de Cilium).
+# The node's fact sheet, read back by cluster-up.sh (through `vagrant ssh`) and by the
+# _k8s/ scripts that need the interface name (Cilium's L2 announcement).
 mkdir -p /etc/kubeadm-lab
 tee /etc/kubeadm-lab/node.env >/dev/null <<EOF
 NODE_NAME=${NODE_NAME}
@@ -393,41 +392,41 @@ EOF
 
 # ============================================================================
 if [ "$NODE_ROLE" = "controlplane" ]; then
-log "[8/8] keepalived — VIP ${VIP} sur ${HOSTONLY_IF} (VRRP)"
+log "[8/8] keepalived — VIP ${VIP} on ${HOSTONLY_IF} (VRRP)"
 
-# POURQUOI keepalived plutôt que kube-vip.
-#   La VIP doit exister AVANT `kubeadm init`, puisque `controlPlaneEndpoint` pointe
-#   dessus. kube-vip tourne en pod statique et fait son élection de leader via
-#   l'API Kubernetes — c'est-à-dire à travers la VIP qu'il est censé porter : un
-#   œuf-et-poule qu'on ne résout qu'avec la bidouille `super-admin.conf`, elle-même
-#   fragile depuis que k8s 1.29 a déplacé `admin.conf` hors de `system:masters`.
-#   keepalived, lui, est un démon VRRP : il ne connaît pas Kubernetes, pose la VIP
-#   dès le boot de la VM, et le bootstrap n'a plus aucune dépendance circulaire.
-#   kube-vip reste une alternative valable une fois le cluster en route (cf. README).
+# WHY keepalived rather than kube-vip.
+#   The VIP must exist BEFORE `kubeadm init`, since `controlPlaneEndpoint` points at it.
+#   kube-vip runs as a static pod and does its leader election through the Kubernetes
+#   API — that is, through the very VIP it is supposed to carry: a chicken-and-egg
+#   problem only solved with the `super-admin.conf` hack, itself fragile since k8s 1.29
+#   moved `admin.conf` out of `system:masters`.
+#   keepalived, on the other hand, is a VRRP daemon: it knows nothing about Kubernetes,
+#   sets the VIP as soon as the VM boots, and the bootstrap has no circular dependency
+#   left. kube-vip stays a valid alternative once the cluster is up (see README).
 
-# VRRP en UNICAST et non en multicast : sur le switch virtuel host-only de VirtualBox,
-# le multicast est le premier truc à se comporter bizarrement.
+# VRRP in UNICAST and not multicast: on VirtualBox's host-only virtual switch, multicast
+# is the first thing to start behaving strangely.
 #
-# ⚠️ LES PAIRS SONT LES CONTROL PLANES *POSSIBLES*, PAS CEUX QUI EXISTENT AUJOURD'HUI.
-#    C'est ce qui rend la croissance 1 CP -> 3 CP sûre, et ce n'est pas un détail.
+# ⚠️ THE PEERS ARE THE *POSSIBLE* CONTROL PLANES, NOT THE ONES THAT EXIST TODAY.
+#    That is what makes growing 1 CP -> 3 CP safe, and it is not a detail.
 #
-#    Le piège, si on n'y prend pas garde : avec CONTROL_PLANES=1, la liste des pairs
-#    serait VIDE et le bloc `unicast_peer` absent. Or keepalived, face à un
-#    `unicast_src_ip` sans aucun pair, ne refuse PAS la configuration : il émet un
-#    CONFIG_DEPRECATED et RETOMBE SILENCIEUSEMENT EN MULTICAST.
-#    Passer ensuite à CONTROL_PLANES=3 ne re-provisionne PAS cp1 (Vagrant ne rejoue les
-#    provisionneurs que sur les VM neuves, sauf `--provision`) : cp1 reste donc en
-#    multicast pendant que cp2/cp3 démarrent en unicast réel. Et les deux modes sont
-#    MUTUELLEMENT SOURDS — un socket bindé sur l'adresse multicast ne reçoit pas
-#    l'unicast, et réciproquement. cp1 se croit seul et prend la VIP ; cp2 se croit
-#    seul aussi et la prend également. DEUX nodes portent alors 192.168.56.5 :
-#    course ARP, API intermittente, et comme admin.conf, kubelet.conf ET le
-#    k8sServiceHost de Cilium pointent tous sur la VIP, c'est tout le cluster qui vacille.
+#    The trap, if one is not careful: with CONTROL_PLANES=1, the peer list would be EMPTY
+#    and the `unicast_peer` block absent. Now keepalived, faced with a `unicast_src_ip`
+#    without a single peer, does NOT refuse the configuration: it emits a
+#    CONFIG_DEPRECATED and SILENTLY FALLS BACK TO MULTICAST.
+#    Switching later to CONTROL_PLANES=3 does NOT re-provision cp1 (Vagrant only replays
+#    provisioners on brand-new VMs, unless `--provision`): so cp1 stays in multicast while
+#    cp2/cp3 start in real unicast. And the two modes are MUTUALLY DEAF — a socket bound
+#    to the multicast address does not receive unicast, and vice versa. cp1 believes it is
+#    alone and takes the VIP; cp2 believes it is alone too and takes it as well. TWO nodes
+#    then carry 192.168.56.5: ARP race, intermittent API, and since admin.conf,
+#    kubelet.conf AND Cilium's k8sServiceHost all point at the VIP, the whole cluster
+#    wobbles.
 #
-#    En listant d'emblée les 5 IP de CP prévues par le plan d'adressage (les mêmes que
-#    les certSANs de cluster-up.sh), la configuration de cp1 est déjà la bonne le jour
-#    où cp2 et cp3 apparaissent. Un pair qui n'existe pas encore ne coûte qu'un paquet
-#    VRRP sans réponse toutes les secondes.
+#    By listing up front the 5 CP IPs the addressing scheme plans for (the same ones as
+#    cluster-up.sh's certSANs), cp1's configuration is already the right one the day cp2
+#    and cp3 show up. A peer that does not exist yet only costs one unanswered VRRP packet
+#    per second.
 peers=""
 for i in 1 2 3 4 5; do
   ip="${NETWORK}.$((CP_IP_START + (i - 1) * CP_IP_STEP))"
@@ -435,36 +434,35 @@ for i in 1 2 3 4 5; do
   peers="${peers}        ${ip}"$'\n'
 done
 
-# cp1 = 100, cp2 = 90, cp3 = 80. Le script de santé retire 30 : un cp1 dont l'apiserver
-# est mort tombe à 70 et passe DERRIÈRE un cp2 sain (90), qui reprend la VIP.
+# cp1 = 100, cp2 = 90, cp3 = 80. The health script subtracts 30: a cp1 whose apiserver is
+# dead drops to 70 and falls BEHIND a healthy cp2 (90), which takes the VIP over.
 priority=$((100 - (NODE_INDEX - 1) * 10))
 [ "$priority" -lt 10 ] && priority=10
 
-# La VIP ne doit vivre que là où l'apiserver LOCAL répond. L'endpoint est accessible
-# en anonyme : le ClusterRoleBinding `system:public-info-viewer`, posé par kubeadm,
-# ouvre /healthz, /livez et /readyz à `system:unauthenticated`. Aucun credential à
-# distribuer au script de santé, donc.
+# The VIP must only live where the LOCAL apiserver answers. The endpoint is reachable
+# anonymously: the `system:public-info-viewer` ClusterRoleBinding, laid down by kubeadm,
+# opens /healthz, /livez and /readyz to `system:unauthenticated`. So there is no
+# credential to hand to the health script.
 #
-# ⚠️ `/livez/ping` et NON `/livez`. Contrairement à ce qu'on croit souvent, `/livez`
-#    AGRÈGE tous les checks enregistrés — dont `etcd`. Or `kubeadm join --control-plane`
-#    rend etcd temporairement indisponible en passant de 1 à 2 membres (kubeadm le
-#    documente lui-même). Un `/livez` global échouant plus de `fall x interval` = 9 s
-#    ferait tomber cp1 à 70 pendant que cp2 vient de passer à 90 : LA VIP SAUTERAIT SUR
-#    CP2 AU MILIEU DU BOOTSTRAP. `/livez/ping` est le sous-check trivial « le processus
-#    répond », sans aucune dépendance à un backend : c'est exactement ce qu'on veut
-#    savoir pour décider qui porte la VIP.
+# ⚠️ `/livez/ping` and NOT `/livez`. Contrary to a common belief, `/livez` AGGREGATES
+#    every registered check — including `etcd`. And `kubeadm join --control-plane` makes
+#    etcd temporarily unavailable while going from 1 to 2 members (kubeadm documents this
+#    itself). A global `/livez` failing for more than `fall x interval` = 9 s would drop
+#    cp1 to 70 while cp2 has just reached 90: THE VIP WOULD JUMP TO CP2 IN THE MIDDLE OF
+#    THE BOOTSTRAP. `/livez/ping` is the trivial sub-check "the process answers", with no
+#    dependency on any backend: exactly what we want to know to decide who carries the VIP.
 #
-# Tant que le cluster n'existe pas, le test échoue sur TOUS les control planes : ils
-# perdent 30 points chacun, l'ordre relatif est préservé, et la VIP est quand même
-# portée. C'est exactement ce qu'il faut pour que `kubeadm init` la trouve en place.
+# As long as the cluster does not exist, the test fails on ALL control planes: they each
+# lose 30 points, the relative order is preserved, and the VIP is carried anyway. That is
+# exactly what is needed for `kubeadm init` to find it in place.
 #
-# Le script vit dans /etc/keepalived et NON dans /usr/local/bin : avec
-# `enable_script_security`, keepalived inspecte CHAQUE composant du chemin et désactive
-# purement et simplement le track_script si un répertoire est group-writable avec un
-# groupe non-root. Or /usr/local/bin devient `root:staff 2775` dès que
-# /etc/staff-group-for-usr-local existe (cas d'un système migré depuis stretch). La
-# bascule de VIP serait alors MORTE, sans autre trace qu'une ligne dans journalctl.
-# /etc/keepalived est root:root par construction : le risque disparaît.
+# The script lives in /etc/keepalived and NOT in /usr/local/bin: with
+# `enable_script_security`, keepalived inspects EVERY component of the path and plainly
+# disables the track_script if a directory is group-writable with a non-root group. And
+# /usr/local/bin becomes `root:staff 2775` as soon as /etc/staff-group-for-usr-local
+# exists (the case of a system migrated from stretch). VIP failover would then be DEAD,
+# with no other trace than a line in journalctl. /etc/keepalived is root:root by
+# construction: the risk disappears.
 tee /etc/keepalived/check-apiserver.sh >/dev/null <<'EOF'
 #!/bin/sh
 curl -sfk --max-time 2 https://127.0.0.1:6443/livez/ping >/dev/null
@@ -472,10 +470,10 @@ EOF
 chown root:root /etc/keepalived/check-apiserver.sh
 chmod 0755 /etc/keepalived/check-apiserver.sh
 
-# Pas de bloc `authentication` : l'authentification VRRPv2 transmet un mot de passe en
-# clair et n'apporte aucune sécurité réelle. Ici la frontière de confiance est le réseau
-# host-only lui-même. Pour cohabiter avec un AUTRE lab keepalived sur le même réseau,
-# c'est VRRP_ROUTER_ID (lab.env) qu'il faut changer, pas un mot de passe.
+# No `authentication` block: VRRPv2 authentication sends a password in the clear and
+# brings no real security. Here the trust boundary is the host-only network itself. To
+# coexist with ANOTHER keepalived lab on the same network, VRRP_ROUTER_ID (lab.env) is
+# what has to change, not a password.
 tee /etc/keepalived/keepalived.conf >/dev/null <<EOF
 global_defs {
     enable_script_security
@@ -511,12 +509,12 @@ EOF
 systemctl enable keepalived >/dev/null 2>&1 || true
 systemctl restart keepalived
 else
-log "[8/8] keepalived — ignoré (node de rôle '${NODE_ROLE}')"
+log "[8/8] keepalived — skipped (node with role '${NODE_ROLE}')"
 fi
 
 # ============================================================================
-log "Node prêt pour kubeadm."
-echo "    rôle       : ${NODE_ROLE}"
-echo "    IP node    : ${NODE_IP}  (interface ${HOSTONLY_IF})"
+log "Node ready for kubeadm."
+echo "    role       : ${NODE_ROLE}"
+echo "    node IP    : ${NODE_IP}  (interface ${HOSTONLY_IF})"
 echo "    kubeadm    : $(kubeadm version -o short 2>/dev/null || echo '?')"
 echo "    containerd : $(containerd --version 2>/dev/null | awk '{print $3}' || echo '?')"

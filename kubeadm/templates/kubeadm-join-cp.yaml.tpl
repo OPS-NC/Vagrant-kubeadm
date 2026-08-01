@@ -1,14 +1,14 @@
-# Modèle de configuration `kubeadm join --control-plane` — rendu dans
-# _out/join-<node>.yaml par kubeadm/cluster-up.sh.
+# `kubeadm join --control-plane` configuration template — rendered into
+# _out/join-<node>.yaml by kubeadm/cluster-up.sh.
 #
-# Pourquoi un fichier de configuration plutôt que la ligne de commande imprimée par
-# `kubeadm token create --print-join-command` : cette ligne ne sait pas transporter
-# `node-ip`, et `kubeadm join` n'a pas de drapeau équivalent. Or sans `node-ip`, le
-# node s'enregistre avec l'IP de la carte NAT partagée par toutes les VM (10.0.2.15).
+# Why a configuration file rather than the command line printed by
+# `kubeadm token create --print-join-command`: that line cannot carry `node-ip`, and
+# `kubeadm join` has no equivalent flag. And without `node-ip`, the node registers with
+# the IP of the NAT NIC shared by every VM (10.0.2.15).
 #
-# ⚠️ `--config` est INCOMPATIBLE avec `--certificate-key` en ligne de commande : la
-#    clé doit être dans le YAML, sous `controlPlane.certificateKey` (et non à la racine,
-#    contrairement à `InitConfiguration`).
+# ⚠️ `--config` is INCOMPATIBLE with `--certificate-key` on the command line: the key
+#    has to be in the YAML, under `controlPlane.certificateKey` (and not at the root,
+#    unlike `InitConfiguration`).
 
 apiVersion: kubeadm.k8s.io/v1beta4
 kind: JoinConfiguration
@@ -22,8 +22,8 @@ nodeRegistration:
 discovery:
   bootstrapToken:
     token: "@TOKEN@"
-    # On rejoint par la VIP : c'est le `controlPlaneEndpoint` du cluster, et il reste
-    # joignable même si le control plane qui a fait le `init` est arrêté.
+    # We join through the VIP: it is the cluster's `controlPlaneEndpoint`, and it stays
+    # reachable even if the control plane that did the `init` is stopped.
     apiServerEndpoint: "@VIP@:6443"
     caCertHashes:
       - "sha256:@CA_HASH@"
@@ -31,7 +31,7 @@ controlPlane:
   localAPIEndpoint:
     advertiseAddress: "@NODE_IP@"
     bindPort: 6443
-  # Déchiffre le Secret `kubeadm-certs` (namespace kube-system), qui porte les CA du
-  # cluster. ⚠️ Il expire au bout de 2 HEURES. Pour en régénérer un :
+  # Decrypts the `kubeadm-certs` Secret (kube-system namespace), which carries the
+  # cluster CAs. ⚠️ It expires after 2 HOURS. To regenerate one:
   #     kubeadm init phase upload-certs --upload-certs
   certificateKey: "@CERT_KEY@"

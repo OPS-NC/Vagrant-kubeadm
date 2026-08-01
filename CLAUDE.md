@@ -280,7 +280,7 @@ resolve. Run it after renaming any heading.
 
   Both versions change in the **same commit**: an English page whose mirror did not follow is a
   documentation bug. **This file is the exception** — English only, on purpose, because it
-  addresses coding agents (it is listed in `SANS_MIROIR` in `docs/build.py`, so it carries no
+  addresses coding agents (it is listed in `WITHOUT_MIRROR` in `docs/build.py`, so it carries no
   "not translated" badge).
 - **Every page starts with the i18n banner**, which `docs/build.py` strips at build time (the
   HTML page has its own switcher). Keep it in the files, and put nothing else between the
@@ -295,13 +295,30 @@ resolve. Run it after renaming any heading.
   FR anchors differ from EN anchors by construction — which means renaming a heading breaks
   every link that targeted it, and `make validate-docs` is what tells you.
 - **`docs/build.py` discovers pages on its own**: every `*.md` in the repo is picked up. Adding
-  a page needs **no** code change; only its menu group (`GROUPES`) and its emoji (`EMOJIS`) are
+  a page needs **no** code change; only its menu group (`GROUPS`) and its emoji (`EMOJIS`) are
   declared, and an unknown directory falls into "Other". Pages are grouped per directory through
-  `MIROIRS`; a page with no mirror is shown in English inside the French menu with an `EN`
+  `MIRRORS`; a page with no mirror is shown in English inside the French menu with an `EN`
   badge — that badge is the symptom of a forgotten translation.
-- **Code comments in French** (scripts, YAML, `docs/build.py`): that is the repo's working
-  language. **Exceptions, in English**: `Vagrantfile` and `lab.env.example`, the first two files
-  a newcomer opens.
+- **Everything that is not a French documentation page is in English.** Code comments,
+  identifiers, script output, error messages, `Makefile`, CI workflows, `.gitignore`,
+  `Vagrantfile`, `lab.env.example`, the `kubeadm/templates/*.tpl` and `docs/build.py` — all
+  English. The repo used to keep its comments in French; that is no longer the case, so do not
+  "restore" French in a script you touch.
+- **The only French left is the FR documentation mirrors** (`LISEZ-MOI.md`, `DEPANNAGE.md`,
+  `kubeadm/MISE-A-JOUR.md`) — their prose, not the output they quote. Three deliberate
+  exceptions inside otherwise English code, all in `docs/build.py`:
+  - the `fr` values of `LABELS` (they *are* the French UI);
+  - the FR menu titles of `GROUPS` and of `OTHER`, same reason;
+  - the **French markers of the `CALLOUTS` table** (`"attention"`, `"jamais"`, `"astuce"`,
+    `"conseil"`, `"remarque"`…). These are not labels, they *parse* the French pages to pick a
+    callout's colour. Translating them silently turns every French callout grey — the kind of
+    breakage no test catches. The callout *kinds* (`danger`/`tip`/`info`) are English because
+    they become CSS classes (`.callout-tip`).
+- When a French page quotes script output, quote the **English** string the script now prints.
+  A French page documenting an English-output tool is the expected result, not an oversight.
+- ⚠️ **`.github/workflows/ci.yml` greps the WORDING of a `Vagrantfile` error.** The
+  `CONTROL_PLANES=2` guard-rail test matches `'is EVEN'`. Reword that message and the test
+  still passes while proving nothing — change both together.
 - **Commit messages in English**, conventional (`fix(...)`, `feat(...)`, `docs: ...`). Branch
   from `main`, one feature per PR, squash merge.
 - Every page of this repo follows the same skeleton (one emoji per `##`, `⚠️`/`💡`/`ℹ️`
@@ -327,7 +344,7 @@ isolated mention is a documentation bug — the reader will never find it.
 | `CLAUDE.md` | every newly earned pitfall, every new validation command |
 | `TROUBLESHOOTING.md` | if the component has a failure mode a reader will meet |
 | `kubeadm/UPGRADE.md` | if it constrains a version or has its own release cycle |
-| `docs/build.py` | the page emoji in `EMOJIS`, its placement in `GROUPES` |
+| `docs/build.py` | the page emoji in `EMOJIS`, its placement in `GROUPS` |
 | **the FR mirror of every page touched** | same structure, same content, **same commit** |
 
 Then `make docs`, then `make validate`, before committing.

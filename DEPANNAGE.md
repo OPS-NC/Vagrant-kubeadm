@@ -70,8 +70,8 @@ rien ne fonctionne tant que VirtualBox ne l'accepte pas.
 ### `vagrant up` refuse un nombre pair de control planes
 
 ```
-Vagrant-KubeADM : CONTROL_PLANES=2 est PAIR — etcd exige un nombre impair pour tenir
-un quorum utile (1, 3, 5). Avec 2 membres, la perte d'un seul node fige l'API.
+Vagrant-KubeADM: CONTROL_PLANES=2 is EVEN — etcd requires an odd number to hold a
+useful quorum (1, 3, 5). With 2 members, losing a single node freezes the API.
 ```
 
 **C'est un garde-fou, pas un bug.** etcd tient le quorum à `(n/2)+1` : deux membres ne tolèrent
@@ -151,11 +151,11 @@ LAB_DIR=/chemin/vers/Vagrant-kubeadm ./_k8s/platform-up.sh
 
 ## 🌐 2. La VIP de l'API et keepalived
 
-### `cluster-up.sh` échoue sur « l'apiserver ne répond pas sur la VIP »
+### `cluster-up.sh` échoue sur « the apiserver does not answer on the VIP »
 
 ```
-    - attente de https://192.168.56.5:6443 ......................... ÉCHEC (600s)
-ERREUR : l'apiserver ne répond pas sur la VIP 192.168.56.5 après 600s.
+    - waiting for https://192.168.56.5:6443 ....................... FAILED (600s)
+ERROR: the apiserver does not answer on the VIP 192.168.56.5 after 600s.
 ```
 
 À ce stade `kubeadm init` a déjà tourné : le script attend `/readyz` **à travers la VIP**, qui
@@ -404,7 +404,7 @@ tls: failed to verify certificate: x509: certificate is valid for 10.96.0.1, 192
 ```
 
 **Symptôme.** `kubeadm init` réussit, la commande de jonction s'affiche, puis `cluster-up.sh`
-meurt sur « impossible d'extraire les éléments de jonction ».
+meurt sur « unable to extract the join material ».
 
 **Cause.** `kubeadm init phase upload-certs` construit son client API à partir de
 `InitConfiguration.LocalAPIEndpoint.AdvertiseAddress` — et **non** du `controlPlaneEndpoint`, ni
@@ -520,7 +520,7 @@ vagrant ssh k8s-w1 -c "ls -la /etc/cni/net.d/"
 ```
 
 Quoi que ce soit de non vide sur un node censé être remis à zéro signifie que le ménage n'est
-pas allé au bout — le script affiche `reset partiel sur <node> — poursuite` et continue au lieu
+pas allé au bout — le script affiche `partial reset on <node> — carrying on` et continue au lieu
 de s'arrêter. Relance-le sur ce node seul :
 
 ```bash

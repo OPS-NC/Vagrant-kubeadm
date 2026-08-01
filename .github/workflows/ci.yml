@@ -1,11 +1,12 @@
-# Validation du dépôt à chaque PR — SANS jamais monter de cluster.
+# Repository validation on every PR — WITHOUT ever bringing a cluster up.
 #
-# Les jobs appellent les mêmes cibles `make` que celles documentées pour l'usage local
-# (`make validate`) : la définition d'un test vit dans le Makefile, jamais en double
-# ici. Un test qui passe en CI et échoue sur le poste (ou l'inverse) est un test cassé.
+# The jobs call the same `make` targets as the ones documented for local use
+# (`make validate`): a test's definition lives in the Makefile, never duplicated here.
+# A test that passes in CI and fails on the workstation (or the other way round) is a
+# broken test.
 #
-# Ce qui n'est PAS ici, et pourquoi :
-#   - `make validate-docs` : déjà couvert par le workflow `docs`.
+# What is NOT here, and why:
+#   - `make validate-docs`: already covered by the `docs` workflow.
 name: ci
 
 on:
@@ -14,81 +15,81 @@ on:
     branches: [main]
   workflow_dispatch: {}
 
-# Lecture seule : rien ici ne publie quoi que ce soit.
+# Read-only: nothing here publishes anything.
 permissions:
   contents: read
 
-# Une PR poussée trois fois de suite n'a pas besoin de trois validations : on annule
-# les exécutions périmées de la même branche.
+# A PR pushed three times in a row does not need three validations: we cancel the stale
+# runs of the same branch.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   shell:
-    name: Syntaxe des scripts shell
+    name: Shell script syntax
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      # `bash -n` sur tous les *.sh suivis par git (cf. Makefile). Rien à installer :
-      # bash est là, et la liste vient de `git ls-files`, donc le checkout suffit.
+      # `bash -n` on every git-tracked *.sh (see Makefile). Nothing to install:
+      # bash is there, and the list comes from `git ls-files`, so the checkout is enough.
       - name: make validate-shell
         run: make validate-shell
 
-      # lab.env est la source unique, mais ses valeurs sont dupliquées comme filet de
-      # sécurité dans le Vagrantfile et dans cluster-up.sh. Deux défauts divergents
-      # donnent un lab incohérent, et rien ne le signalerait avant le `vagrant up`.
+      # lab.env is the single source, but its values are duplicated as a safety net in the
+      # Vagrantfile and in cluster-up.sh. Two diverging defaults give an incoherent lab,
+      # and nothing would report it before the `vagrant up`.
       - name: make validate-defaults
         run: make validate-defaults
 
-      # `_k8s/` est un sous-module public (k8s-playground). Ce test garantit qu'un
-      # `git clone --recurse-submodules` fonctionnera pour un tiers : URL en https (et
-      # non en SSH, inutilisable sans clé) et commit épinglé réellement poussé. Les deux
-      # erreurs sont invisibles depuis la machine de celui qui les commet.
+      # `_k8s/` is a public submodule (k8s-playground). This test guarantees that a
+      # `git clone --recurse-submodules` will work for a third party: https URL (and not
+      # SSH, unusable without a key) and a pinned commit that really is pushed. Both
+      # errors are invisible from the machine of whoever commits them.
       - name: make validate-submodule
         run: make validate-submodule
 
   yaml:
-    name: Syntaxe des YAML
+    name: YAML syntax
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
-      # Même épinglage que le workflow `docs` : setup-uv n'a pas de tag majeur flottant
-      # au-delà de v7, un `@v9` n'existe pas et ferait échouer le job.
-      - name: Installer uv
+      # Same pinning as the `docs` workflow: setup-uv publishes no floating major tag
+      # beyond v7, a `@v9` does not exist and would fail the job.
+      - name: Install uv
         uses: astral-sh/setup-uv@v9.0.0
         with:
           enable-cache: true
 
-      # uv fournit PyYAML à la volée (cf. YAML_PY dans le Makefile) : rien à installer
-      # au niveau système, et la même commande tourne en local.
+      # uv provides PyYAML on the fly (see YAML_PY in the Makefile): nothing to install
+      # system-wide, and the very same command runs locally.
       - name: make validate-yaml
         run: make validate-yaml
 
   kubeadm:
-    name: Modèles kubeadm (schéma v1beta4)
+    name: kubeadm templates (v1beta4 schema)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
-      - name: Installer uv
+      - name: Install uv
         uses: astral-sh/setup-uv@v9.0.0
         with:
           enable-cache: true
 
-      # C'est LE job qui a le plus de valeur : il installe le vrai binaire kubeadm et
-      # fait valider les modèles par lui. Sans ça, une erreur de schéma v1beta4 (le
-      # piège `extraArgs` dictionnaire → liste) ne se découvre qu'au `kubeadm init`,
-      # c'est-à-dire après dix minutes de `vagrant up`.
-      - name: Installer kubeadm
+      # This is THE most valuable job: it installs the real kubeadm binary and has it
+      # validate the templates. Without it, a v1beta4 schema mistake (the `extraArgs`
+      # dictionary → list trap) is only discovered at `kubeadm init` time, that is, after
+      # ten minutes of `vagrant up`.
+      - name: Install kubeadm
         run: |
           K8S_APT_MINOR="$(sed -n 's/^K8S_APT_MINOR=//p' lab.env.example | head -n1)"
           K8S_VERSION="$(sed -n 's/^K8S_VERSION=//p' lab.env.example | head -n1)"
-          echo "Dépôt ${K8S_APT_MINOR}, version ${K8S_VERSION}"
+          echo "Repo ${K8S_APT_MINOR}, version ${K8S_VERSION}"
           sudo mkdir -p -m 755 /etc/apt/keyrings
-          # `--batch --yes` : sans tty, gpg tente d'ouvrir /dev/tty pour demander
-          # confirmation d'écrasement et meurt sur « cannot open '/dev/tty' ».
+          # `--batch --yes`: without a tty, gpg tries to open /dev/tty to ask for
+          # overwrite confirmation and dies on "cannot open '/dev/tty'".
           curl -fsSL "https://pkgs.k8s.io/core:/stable:/${K8S_APT_MINOR}/deb/Release.key" \
             | sudo gpg --batch --yes --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
           echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] \
@@ -107,13 +108,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Vagrant n'est plus fourni par les images ubuntu-24.04 des runners : on
-      # l'installe depuis le dépôt APT HashiCorp, et seulement s'il manque (au cas où
-      # une future image le remettrait).
-      - name: Installer Vagrant
+      # Vagrant is no longer shipped in the runners' ubuntu-24.04 images: we install it
+      # from the HashiCorp APT repository, and only when missing (in case a future image
+      # puts it back).
+      - name: Install Vagrant
         run: |
           if command -v vagrant >/dev/null 2>&1; then
-            echo "Vagrant déjà présent : $(vagrant --version)"
+            echo "Vagrant already present: $(vagrant --version)"
             exit 0
           fi
           wget -qO- https://apt.releases.hashicorp.com/gpg \
@@ -125,25 +126,29 @@ jobs:
           sudo apt-get install -y -qq vagrant
           vagrant --version
 
-      # --ignore-provider : le runner n'a pas VirtualBox, et sans ce drapeau la
-      # validation échoue sur le provider avant même de lire le Vagrantfile. En local
-      # le drapeau est omis, ce qui valide EN PLUS la config provider.
+      # --ignore-provider: the runner has no VirtualBox, and without that flag the
+      # validation fails on the provider before even reading the Vagrantfile. Locally the
+      # flag is omitted, which ALSO validates the provider config.
       - name: make validate-vagrant
         run: make validate-vagrant VAGRANT_VALIDATE_FLAGS=--ignore-provider
         env:
-          # Pas de télémétrie ni de check de version depuis un runner jetable.
+          # No telemetry and no version check from a throwaway runner.
           VAGRANT_NO_COLOR: "1"
           CHECKPOINT_DISABLE: "1"
 
-      # Garde-fou de topologie : le Vagrantfile doit refuser un nombre PAIR de control
-      # planes (etcd n'y tient aucun quorum utile). Un test qui vérifie qu'une erreur
-      # SE PRODUIT bien vaut mieux qu'un commentaire qui l'affirme.
-      - name: Le Vagrantfile refuse CONTROL_PLANES pair
+      # Topology guard rail: the Vagrantfile must refuse an EVEN number of control planes
+      # (etcd holds no useful quorum there). A test that checks an error DOES happen beats
+      # a comment claiming it does.
+      #
+      # ⚠️ The grep matches the WORDING of the Vagrantfile's error message ("is EVEN"). If
+      #    that message is reworded, this pattern has to follow — otherwise the guard rail
+      #    is still there but the test silently stops proving anything.
+      - name: The Vagrantfile refuses an even CONTROL_PLANES
         run: |
-          if CONTROL_PLANES=2 vagrant validate --ignore-provider 2>&1 | grep -q 'PAIR'; then
-            echo "✅ garde-fou etcd : CONTROL_PLANES=2 bien refusé"
+          if CONTROL_PLANES=2 vagrant validate --ignore-provider 2>&1 | grep -q 'is EVEN'; then
+            echo "✅ etcd guard rail: CONTROL_PLANES=2 correctly refused"
           else
-            echo "::error::le Vagrantfile a accepté CONTROL_PLANES=2" && exit 1
+            echo "::error::the Vagrantfile accepted CONTROL_PLANES=2" && exit 1
           fi
         env:
           VAGRANT_NO_COLOR: "1"

@@ -1,21 +1,21 @@
-# Modèle de configuration `kubeadm init` — rendu dans _out/kubeadm-init.yaml par
-# kubeadm/cluster-up.sh (substitution des marqueurs @NOM@).
+# `kubeadm init` configuration template — rendered into _out/kubeadm-init.yaml by
+# kubeadm/cluster-up.sh (substitution of the @NAME@ markers).
 #
-# API `kubeadm.k8s.io/v1beta4` : c'est la version courante et celle par défaut depuis
-# Kubernetes 1.31. `v1beta3` est dépréciée.
+# API `kubeadm.k8s.io/v1beta4`: this is the current version, and the default one since
+# Kubernetes 1.31. `v1beta3` is deprecated.
 #
-# ⚠️ LE PIÈGE DE LA MIGRATION v1beta3 -> v1beta4 : `extraArgs` et `kubeletExtraArgs`
-#    ne sont PLUS des dictionnaires mais des LISTES de {name, value} — le changement a
-#    été fait pour autoriser un même drapeau plusieurs fois. Tout fichier écrit avant
-#    1.31 est donc invalide tel quel, et l'erreur renvoyée n'est pas explicite.
-#      v1beta3 :  extraArgs: {bind-address: "0.0.0.0"}
-#      v1beta4 :  extraArgs: [{name: bind-address, value: "0.0.0.0"}]
+# ⚠️ THE v1beta3 -> v1beta4 MIGRATION TRAP: `extraArgs` and `kubeletExtraArgs` are NO
+#    LONGER dictionaries but LISTS of {name, value} — the change was made to allow the
+#    same flag several times. So any file written before 1.31 is invalid as-is, and the
+#    error returned is not explicit.
+#      v1beta3:  extraArgs: {bind-address: "0.0.0.0"}
+#      v1beta4:  extraArgs: [{name: bind-address, value: "0.0.0.0"}]
 
 apiVersion: kubeadm.k8s.io/v1beta4
 kind: InitConfiguration
 localAPIEndpoint:
-  # L'IP RÉELLE de ce node, surtout pas la VIP : c'est l'adresse sur laquelle CET
-  # apiserver écoute. La VIP, elle, est le `controlPlaneEndpoint` partagé (plus bas).
+  # The REAL IP of this node, definitely not the VIP: this is the address THIS apiserver
+  # listens on. The VIP is the shared `controlPlaneEndpoint` (further down).
   advertiseAddress: "@NODE_IP@"
   bindPort: 6443
 nodeRegistration:
@@ -23,11 +23,11 @@ nodeRegistration:
   criSocket: unix:///run/containerd/containerd.sock
   imagePullPolicy: IfNotPresent
   kubeletExtraArgs:
-    # ⚠️ LE piège numéro un d'un lab Vagrant. Chaque VM a une carte NAT eth0 en
-    #    10.0.2.15 — LA MÊME sur toutes les VM. Sans `node-ip`, le kubelet choisit
-    #    cette route par défaut et TOUS les nodes s'enregistrent avec la même adresse :
-    #    `kubectl get nodes -o wide` semble correct, mais les logs, `kubectl exec`,
-    #    les probes et le trafic inter-node partent au mauvais endroit.
+    # ⚠️ THE number one trap of a Vagrant lab. Every VM has a NAT NIC eth0 at
+    #    10.0.2.15 — THE SAME on every VM. Without `node-ip`, the kubelet picks that
+    #    default route and ALL the nodes register with the same address:
+    #    `kubectl get nodes -o wide` looks correct, but the logs, `kubectl exec`, the
+    #    probes and cross-node traffic all go to the wrong place.
     - name: node-ip
       value: "@NODE_IP@"
 ---
@@ -36,35 +36,35 @@ kind: ClusterConfiguration
 kubernetesVersion: v@K8S_VERSION@
 clusterName: @CLUSTER_NAME@
 
-# `controlPlaneEndpoint` est figé dans les certificats et dans tous les kubeconfig au
-# moment du `init`. On y met la VIP keepalived MÊME avec un seul control plane : c'est
-# ce qui permet d'ajouter un CP plus tard par un simple `join`, sans régénérer les
-# certificats ni redistribuer les kubeconfig.
+# `controlPlaneEndpoint` is frozen into the certificates and into every kubeconfig at
+# `init` time. We put the keepalived VIP in there EVEN with a single control plane: that is
+# what makes it possible to add a CP later through a plain `join`, without regenerating the
+# certificates nor redistributing the kubeconfigs.
 controlPlaneEndpoint: "@VIP@:6443"
 
 networking:
-  # ⚠️ Ce CIDR doit être celui que le CNI annonce réellement. Cilium en mode
-  #    cluster-pool part par défaut sur 10.0.0.0/8, sans aucun rapport avec ce qui est
-  #    déclaré ici : _k8s/cilium/cilium-up.sh lui repasse donc POD_CIDR explicitement.
+  # ⚠️ This CIDR must be the one the CNI really announces. Cilium in cluster-pool mode
+  #    defaults to 10.0.0.0/8, unrelated to whatever is declared here:
+  #    _k8s/cilium/cilium-up.sh therefore passes POD_CIDR to it explicitly.
   podSubnet: "@POD_CIDR@"
   serviceSubnet: "@SERVICE_CIDR@"
   dnsDomain: cluster.local
 
 etcd:
   local:
-    # etcd empilé (sur les control planes) : c'est le défaut kubeadm et le bon choix
-    # pour un lab. Il est très sensible à la latence de fsync — d'où l'intérêt de
-    # garder les disques des VM sur un SSD (cf. TROUBLESHOOTING.md).
+    # Stacked etcd (on the control planes): this is the kubeadm default and the right call
+    # for a lab. It is very sensitive to fsync latency — hence the value of keeping the
+    # VM disks on an SSD (see TROUBLESHOOTING.md).
     dataDir: /var/lib/etcd
     extraArgs:
-      # kubeadm n'expose les métriques d'etcd qu'en loopback
-      # (`--listen-metrics-urls=http://127.0.0.1:2381`), parce que cet endpoint ne
-      # sert par défaut qu'à la sonde de liveness du pod statique. Prometheus, lui,
-      # scrute depuis un pod : il ne peut pas atteindre le loopback du node, et la
-      # cible `kubeEtcd` de kube-prometheus-stack reste DOWN sans explication.
-      # `0.0.0.0` couvre aussi `127.0.0.1`, donc la sonde continue de fonctionner.
-      # Acceptable ici parce que le réseau host-only est isolé — ce port ne demande
-      # AUCUNE authentification et ne doit jamais être exposé sur un vrai réseau.
+      # kubeadm only exposes etcd's metrics on loopback
+      # (`--listen-metrics-urls=http://127.0.0.1:2381`), because by default that endpoint
+      # only serves the static pod's liveness probe. Prometheus, however, scrapes from a
+      # pod: it cannot reach the node's loopback, and kube-prometheus-stack's `kubeEtcd`
+      # target stays DOWN with no explanation.
+      # `0.0.0.0` also covers `127.0.0.1`, so the probe keeps working.
+      # Acceptable here because the host-only network is isolated — this port requires NO
+      # authentication at all and must never be exposed on a real network.
       - name: listen-metrics-urls
         value: "http://0.0.0.0:2381"
 
@@ -72,10 +72,10 @@ apiServer:
   certSANs:
 @CERT_SANS@
 
-# `bind-address: 0.0.0.0` sur ces deux composants : par défaut ils n'écoutent qu'en
-# loopback, et Prometheus ne peut alors scruter ni le controller-manager ni le
-# scheduler (`_k8s/observability/` affiche deux cibles DOWN, sans explication).
-# Acceptable ici parce que le lab vit sur un réseau host-only isolé.
+# `bind-address: 0.0.0.0` on these two components: by default they only listen on
+# loopback, and Prometheus can then scrape neither the controller-manager nor the
+# scheduler (`_k8s/observability/` shows two DOWN targets, with no explanation).
+# Acceptable here because the lab lives on an isolated host-only network.
 controllerManager:
   extraArgs:
     - name: bind-address
@@ -87,9 +87,9 @@ scheduler:
 ---
 apiVersion: kubelet.config.k8s.io/v1beta1
 kind: KubeletConfiguration
-# Depuis 1.34 le kubelet lit le cgroup driver directement auprès du runtime par la
-# méthode CRI `RuntimeConfig`, et ce champ n'est plus qu'un repli (retiré en 1.38).
-# Ce qui compte VRAIMENT, c'est `SystemdCgroup = true` côté containerd — posé par
-# kubeadm/provision.sh. On garde la ligne : elle documente l'intention et couvre le
-# cas CONTAINERD_SOURCE=debian, où containerd 1.7 n'implémente pas `RuntimeConfig`.
+# Since 1.34 the kubelet reads the cgroup driver directly from the runtime through the CRI
+# `RuntimeConfig` method, and this field is now only a fallback (removed in 1.38).
+# What REALLY matters is `SystemdCgroup = true` on the containerd side — set by
+# kubeadm/provision.sh. We keep the line: it documents the intent and covers the
+# CONTAINERD_SOURCE=debian case, where containerd 1.7 does not implement `RuntimeConfig`.
 cgroupDriver: systemd

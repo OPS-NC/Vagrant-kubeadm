@@ -1,44 +1,44 @@
 #!/usr/bin/env bash
 #
-# cluster-up.sh — enchaîne les commandes kubeadm pour monter le cluster
-# (init -> join des control planes -> join des workers -> kubeconfig) après `vagrant up`.
+# cluster-up.sh — chains the kubeadm commands that bring the cluster up
+# (init -> join the control planes -> join the workers -> kubeconfig) after `vagrant up`.
 #
-# À lancer depuis la racine du dépôt :
+# Run it from the repository root:
 #     ./kubeadm/cluster-up.sh
 #
-# La topologie vient de lab.env (source unique partagée avec le Vagrantfile). Elle se
-# surcharge ponctuellement par variable d'environnement :
+# The topology comes from lab.env (the single source shared with the Vagrantfile). It can
+# be overridden case by case through an environment variable:
 #     CONTROL_PLANES=3 WORKERS=3 ./kubeadm/cluster-up.sh
 #
-# IDEMPOTENT, et c'est aussi la façon d'AGRANDIR le lab : ajoute des nodes dans lab.env,
-# `vagrant up`, puis relance ce script — il saute ce qui est déjà en place et ne joint
-# que les nouveaux nodes.
+# IDEMPOTENT, and this is also how you GROW the lab: add nodes to lab.env, `vagrant up`,
+# then re-run this script — it skips what is already in place and only joins the new
+# nodes.
 #
-# Le script ne fait RIEN à l'intérieur des VM lui-même : il rend les configurations dans
-# `_out/` (visible depuis les VM via le dossier synchronisé /vagrant) puis appelle
-# kubeadm/node-init.sh et kubeadm/node-join.sh par `vagrant ssh`.
+# The script does NOTHING inside the VMs itself: it renders the configurations into
+# `_out/` (visible from the VMs through the /vagrant synced folder) then calls
+# kubeadm/node-init.sh and kubeadm/node-join.sh over `vagrant ssh`.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_DIR"
 
-# --- Topologie : source unique lab.env (partagée avec le Vagrantfile) -------
-# Chargée SANS écraser une variable déjà exportée : la surcharge en ligne de commande
-# reste prioritaire. Le nom de clé est validé avant tout `eval` — un lab.env bricolé
-# ne doit pas pouvoir exécuter du code arbitraire.
+# --- Topology: single source lab.env (shared with the Vagrantfile) ----------
+# Loaded WITHOUT overwriting an already exported variable: a command-line override stays
+# in charge. The key name is validated before any `eval` — a hand-mangled lab.env must not
+# be able to run arbitrary code.
 if [ -f "${REPO_DIR}/lab.env" ]; then
   while IFS='=' read -r key val || [ -n "$key" ]; do
     case "$key" in ''|\#*) continue ;; esac
     case "$key" in [A-Za-z_]*) ;; *) continue ;; esac
     printf '%s' "$key" | grep -qE '^[A-Za-z_][A-Za-z0-9_]*$' || continue
-    val="${val%%#*}"                                    # commentaire de fin de ligne
-    val="$(printf '%s' "$val" | tr -d '[:space:]"'"'")" # espaces et guillemets
+    val="${val%%#*}"                                    # trailing comment
+    val="$(printf '%s' "$val" | tr -d '[:space:]"'"'")" # whitespace and quotes
     eval ": \${$key:=\$val}"
   done < "${REPO_DIR}/lab.env"
 fi
 
-# --- Paramètres (défauts = filet de sécurité si lab.env est absent) ---------
-# ⚠️ Ces défauts DOIVENT rester alignés sur ceux du Vagrantfile et de lab.env.example.
+# --- Parameters (defaults = safety net if lab.env is missing) ---------------
+# ⚠️ These defaults MUST stay aligned with the Vagrantfile's and lab.env.example's.
 CONTROL_PLANES="${CONTROL_PLANES:-1}"
 WORKERS="${WORKERS:-2}"
 NETWORK="${NETWORK:-192.168.56}"
@@ -55,51 +55,51 @@ CP_IP_START="${CP_IP_START:-10}"  ; CP_IP_STEP="${CP_IP_STEP:-10}"
 WK_IP_START="${WK_IP_START:-101}" ; WK_IP_STEP="${WK_IP_STEP:-1}"
 OUT="${OUT:-_out}"
 
-WAIT_API="${WAIT_API:-600}"   # apiserver joignable après `kubeadm init`
+WAIT_API="${WAIT_API:-600}"   # apiserver reachable after `kubeadm init`
 
 log() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 
-# --- Pré-requis -------------------------------------------------------------
+# --- Prerequisites ----------------------------------------------------------
 for bin in vagrant kubectl; do
-  command -v "$bin" >/dev/null 2>&1 || { echo "ERREUR : '$bin' introuvable dans le PATH." >&2; exit 1; }
+  command -v "$bin" >/dev/null 2>&1 || { echo "ERROR: '$bin' not found in PATH." >&2; exit 1; }
 done
 
-# --- Cohérence de la configuration ------------------------------------------
+# --- Configuration coherence ------------------------------------------------
 case "$CNI" in cilium|calico|flannel|none) ;; *)
-  echo "ERREUR : CNI='${CNI}' inconnu (cilium|calico|flannel|none)." >&2 ; exit 1 ;; esac
+  echo "ERROR: CNI='${CNI}' unknown (cilium|calico|flannel|none)." >&2 ; exit 1 ;; esac
 
 KUBE_PROXY_REPLACEMENT="$(printf '%s' "$KUBE_PROXY_REPLACEMENT" | tr '[:upper:]' '[:lower:]')"
 case "$KUBE_PROXY_REPLACEMENT" in true|false) ;; *)
-  echo "ERREUR : KUBE_PROXY_REPLACEMENT='${KUBE_PROXY_REPLACEMENT}' inconnu (true|false)." >&2 ; exit 1 ;; esac
+  echo "ERROR: KUBE_PROXY_REPLACEMENT='${KUBE_PROXY_REPLACEMENT}' unknown (true|false)." >&2 ; exit 1 ;; esac
 
-# Sans kube-proxy ET sans remplaçant, AUCUN Service ne fonctionne — pas même
-# l'accès de CoreDNS à l'API. Seul Cilium sait le remplacer dans ce lab, donc on refuse
-# la combinaison au lieu de livrer un cluster silencieusement inutilisable.
+# Without kube-proxy AND without a replacement, NO Service works — not even CoreDNS
+# reaching the API. Only Cilium can replace it in this lab, so we refuse the combination
+# instead of delivering a silently unusable cluster.
 if [ "$KUBE_PROXY_REPLACEMENT" = "true" ] && [ "$CNI" != "cilium" ]; then
   cat >&2 <<EOF
-ERREUR : KUBE_PROXY_REPLACEMENT=true exige CNI=cilium (actuellement CNI=${CNI}).
+ERROR: KUBE_PROXY_REPLACEMENT=true requires CNI=cilium (currently CNI=${CNI}).
 
-  Avec cette combinaison, cluster-up.sh sauterait l'installation de kube-proxy alors
-  que ${CNI} ne sait pas le remplacer : plus aucune ClusterIP ne répondrait.
+  With that combination, cluster-up.sh would skip installing kube-proxy while
+  ${CNI} cannot replace it: no ClusterIP would answer any more.
 
-  Deux issues, dans lab.env :
-    - CNI=cilium                     (garder le remplacement eBPF, défaut du dépôt)
-    - KUBE_PROXY_REPLACEMENT=false   (garder kube-proxy et ${CNI})
+  Two ways out, in lab.env:
+    - CNI=cilium                     (keep the eBPF replacement, the repo default)
+    - KUBE_PROXY_REPLACEMENT=false   (keep kube-proxy and ${CNI})
 EOF
   exit 1
 fi
 
 if [ "$CONTROL_PLANES" -lt 1 ]; then
-  echo "ERREUR : CONTROL_PLANES=${CONTROL_PLANES} — il en faut au moins 1." >&2 ; exit 1
+  echo "ERROR: CONTROL_PLANES=${CONTROL_PLANES} — at least 1 is required." >&2 ; exit 1
 fi
 if [ $((CONTROL_PLANES % 2)) -eq 0 ]; then
-  echo "ERREUR : CONTROL_PLANES=${CONTROL_PLANES} est PAIR. etcd exige un nombre impair" >&2
-  echo "         pour tenir un quorum utile (1, 3, 5) : avec 2 membres, la perte d'un" >&2
-  echo "         seul node fige l'API." >&2
+  echo "ERROR: CONTROL_PLANES=${CONTROL_PLANES} is EVEN. etcd requires an odd number" >&2
+  echo "       to hold a useful quorum (1, 3, 5): with 2 members, losing a single" >&2
+  echo "       node freezes the API." >&2
   exit 1
 fi
 
-# --- Calcul des IP et des noms ----------------------------------------------
+# --- Computing the IPs and the names ----------------------------------------
 cp_names=() ; cp_ips=() ; wk_names=() ; wk_ips=()
 for ((i = 1; i <= CONTROL_PLANES; i++)); do
   cp_names+=("${NODE_PREFIX}-cp${i}")
@@ -111,43 +111,43 @@ for ((i = 1; i <= WORKERS; i++)); do
 done
 first_cp="${cp_names[0]}" ; first_cp_ip="${cp_ips[0]}"
 
-echo "==> Topologie  : ${CONTROL_PLANES} control plane(s) + ${WORKERS} worker(s)"
+echo "==> Topology   : ${CONTROL_PLANES} control plane(s) + ${WORKERS} worker(s)"
 echo "    control    : $(IFS=' '; echo "${cp_names[*]}") -> $(IFS=' '; echo "${cp_ips[*]}")"
-echo "    workers    : ${wk_names[*]:-aucun} -> ${wk_ips[*]:-}"
-echo "==> API        : https://${VIP}:6443   (VIP keepalived)"
-echo "==> Kubernetes : v${K8S_VERSION} — CNI=${CNI}, kube-proxy $([ "$KUBE_PROXY_REPLACEMENT" = true ] && echo 'REMPLACÉ par Cilium (eBPF)' || echo 'installé')"
+echo "    workers    : ${wk_names[*]:-none} -> ${wk_ips[*]:-}"
+echo "==> API        : https://${VIP}:6443   (keepalived VIP)"
+echo "==> Kubernetes : v${K8S_VERSION} — CNI=${CNI}, kube-proxy $([ "$KUBE_PROXY_REPLACEMENT" = true ] && echo 'REPLACED by Cilium (eBPF)' || echo 'installed')"
 
-# --- Les VM tournent-elles ? -------------------------------------------------
-# Diagnostiquer ici coûte une seconde ; le diagnostiquer plus tard, c'est un
-# `vagrant ssh` qui part en timeout au milieu d'un `join` à moitié fait.
-manquantes=()
+# --- Are the VMs running? ----------------------------------------------------
+# Diagnosing it here costs a second; diagnosing it later means a `vagrant ssh` timing out
+# in the middle of a half-finished `join`.
+missing=()
 for n in "${cp_names[@]}" "${wk_names[@]:-}"; do
   [ -z "$n" ] && continue
-  # `|| true` : si `vagrant status` échoue (VM absente de l'index, VirtualBox manquant,
-  # NODE_PREFIX changé), `set -e` tuerait le script SANS message — alors que tout le
-  # bloc ci-dessous existe précisément pour dire « lance d'abord vagrant up ».
-  etat="$(vagrant status "$n" --machine-readable 2>/dev/null \
+  # `|| true`: if `vagrant status` fails (VM absent from the index, VirtualBox missing,
+  # NODE_PREFIX changed), `set -e` would kill the script WITHOUT a message — while the
+  # whole block below exists precisely to say "run vagrant up first".
+  state="$(vagrant status "$n" --machine-readable 2>/dev/null \
            | awk -F, '$3 == "state" {print $4; exit}' || true)"
-  [ "$etat" = "running" ] || manquantes+=("${n} (${etat:-inexistante})")
+  [ "$state" = "running" ] || missing+=("${n} (${state:-nonexistent})")
 done
-if [ "${#manquantes[@]}" -gt 0 ]; then
-  echo "ERREUR : ces VM ne tournent pas : ${manquantes[*]}" >&2
-  echo "         Lance d'abord :  vagrant up" >&2
+if [ "${#missing[@]}" -gt 0 ]; then
+  echo "ERROR: these VMs are not running: ${missing[*]}" >&2
+  echo "       Run this first:  vagrant up" >&2
   exit 1
 fi
 
 mkdir -p "$OUT"
 
-# Exécute une commande dans une VM. `-q` et LogLevel=ERROR pour que la sortie du
-# script reste lisible (sinon OpenSSH commente chaque connexion).
-sur_node() {
+# Runs a command in a VM. `-q` and LogLevel=ERROR so the script's output stays readable
+# (otherwise OpenSSH comments on every connection).
+on_node() {
   local node="$1" ; shift
   vagrant ssh "$node" -c "$*" -- -q -o LogLevel=ERROR
 }
 
-# Rendu d'un modèle : substitution des marqueurs @NOM@. `@CERT_SANS@` est une LISTE,
-# donc traitée à part (`r` insère le fichier après la ligne, `d` supprime le marqueur).
-rendre() {
+# Rendering a template: substitution of the @NAME@ markers. `@CERT_SANS@` is a LIST, so it
+# is handled separately (`r` inserts the file after the line, `d` deletes the marker).
+render() {
   local tpl="$1" dest="$2" node_name="$3" node_ip="$4"
   sed -e "s|@NODE_NAME@|${node_name}|g" \
       -e "s|@NODE_IP@|${node_ip}|g" \
@@ -165,12 +165,12 @@ rendre() {
 }
 
 # ============================================================================
-log "[1/5] Rendu de la configuration kubeadm (${OUT}/)"
+log "[1/5] Rendering the kubeadm configuration (${OUT}/)"
 
-# certSANs : tout ce par quoi on peut légitimement joindre l'apiserver. Il faut les
-# poser MAINTENANT — un SAN oublié ne s'ajoute qu'en régénérant les certificats. On y
-# met TOUTES les IP de control plane possibles, y compris celles de nodes pas encore
-# créés, pour qu'agrandir le cluster plus tard ne demande aucune régénération.
+# certSANs: everything the apiserver can legitimately be reached through. They have to be
+# set NOW — a forgotten SAN can only be added by regenerating the certificates. We put ALL
+# the possible control-plane IPs in there, including those of nodes not yet created, so
+# that growing the cluster later requires no regeneration.
 {
   echo "    - ${VIP}"
   echo "    - kubernetes-api"
@@ -182,53 +182,52 @@ log "[1/5] Rendu de la configuration kubeadm (${OUT}/)"
   echo "    - localhost"
 } >"${OUT}/certsans.txt"
 
-rendre kubeadm/templates/kubeadm-init.yaml.tpl "${OUT}/kubeadm-init.yaml" \
+render kubeadm/templates/kubeadm-init.yaml.tpl "${OUT}/kubeadm-init.yaml" \
        "$first_cp" "$first_cp_ip"
 echo "    ${OUT}/kubeadm-init.yaml  (${first_cp} @ ${first_cp_ip})"
 
 # ============================================================================
-log "[2/5] kubeadm init sur ${first_cp}"
-# `--skip-phases=addon/kube-proxy` plutôt que le champ déclaratif `proxy.disabled` de
-# v1beta4 : le drapeau est éprouvé sur toutes les versions, et c'est celui que la doc
-# Cilium documente. Le résultat est identique.
+log "[2/5] kubeadm init on ${first_cp}"
+# `--skip-phases=addon/kube-proxy` rather than v1beta4's declarative `proxy.disabled`
+# field: the flag is proven across every version, and it is the one the Cilium docs use.
+# The result is identical.
 skip=""
 [ "$KUBE_PROXY_REPLACEMENT" = "true" ] && skip="addon/kube-proxy"
-sur_node "$first_cp" "sudo SKIP_PHASES='${skip}' bash /vagrant/kubeadm/node-init.sh"
+on_node "$first_cp" "sudo SKIP_PHASES='${skip}' bash /vagrant/kubeadm/node-init.sh"
 
-[ -f "${OUT}/join.env" ] || { echo "ERREUR : ${OUT}/join.env absent — le init a échoué." >&2; exit 1; }
+[ -f "${OUT}/join.env" ] || { echo "ERROR: ${OUT}/join.env missing — the init failed." >&2; exit 1; }
 # shellcheck disable=SC1090
 . "${OUT}/join.env"
-: "${TOKEN:?token de jonction absent}" "${CA_HASH:?empreinte CA absente}" "${CERT_KEY:?clé de certificats absente}"
+: "${TOKEN:?join token missing}" "${CA_HASH:?CA hash missing}" "${CERT_KEY:?certificate key missing}"
 
-# --- kubeconfig sur l'hôte ---------------------------------------------------
-# Rien à copier : node-init.sh a écrit admin.conf dans le dossier synchronisé.
+# --- kubeconfig on the host --------------------------------------------------
+# Nothing to copy: node-init.sh wrote admin.conf into the synced folder.
 cp -f "${OUT}/admin.conf" "${REPO_DIR}/kubeconfig"
-# Le `chmod` posé par node-init.sh DANS la VM est un no-op : sur un montage vboxsf les
-# permissions viennent des options fmode/dmode du montage, pas du fichier. C'est donc
-# ICI, côté hôte, que le durcissement a un effet réel. `_out/` reste lisible par toutes
-# les VM du lab (il porte le token de jonction et la clé de certificats) — il est
-# gitignoré, mais ce n'est pas un coffre-fort.
+# The `chmod` applied by node-init.sh INSIDE the VM is a no-op: on a vboxsf mount the
+# permissions come from the mount's fmode/dmode options, not from the file. So it is HERE,
+# on the host side, that the hardening has a real effect. `_out/` stays readable by every
+# VM of the lab (it holds the join token and the certificate key) — it is gitignored, but
+# it is not a vault.
 chmod 0600 "${REPO_DIR}/kubeconfig"
 chmod 0700 "${OUT}" 2>/dev/null || true
 chmod 0600 "${OUT}/join.env" "${OUT}/admin.conf" 2>/dev/null || true
 export KUBECONFIG="${REPO_DIR}/kubeconfig"
 
-# L'apiserver doit répondre PAR LA VIP avant de joindre quoi que ce soit : c'est
-# l'adresse que les autres nodes utiliseront, et c'est le seul vrai test que keepalived
-# fait bien son travail.
-printf '    - attente de https://%s:6443 ' "$VIP"
-fin=$((SECONDS + WAIT_API))
+# The apiserver must answer THROUGH THE VIP before joining anything: that is the address
+# the other nodes will use, and it is the only real test that keepalived is doing its job.
+printf '    - waiting for https://%s:6443 ' "$VIP"
+deadline=$((SECONDS + WAIT_API))
 until kubectl get --raw='/readyz' >/dev/null 2>&1; do
-  if [ "$SECONDS" -ge "$fin" ]; then
-    printf ' ÉCHEC (%ss)\n' "$WAIT_API"
+  if [ "$SECONDS" -ge "$deadline" ]; then
+    printf ' FAILED (%ss)\n' "$WAIT_API"
     cat >&2 <<EOF
-ERREUR : l'apiserver ne répond pas sur la VIP ${VIP} après ${WAIT_API}s.
+ERROR: the apiserver does not answer on the VIP ${VIP} after ${WAIT_API}s.
 
-  Les deux causes, par fréquence :
-    1. keepalived ne porte pas la VIP. À vérifier depuis l'hôte :
+  The two causes, by frequency:
+    1. keepalived is not carrying the VIP. To check from the host:
          vagrant ssh ${first_cp} -c "ip -4 addr show | grep ${VIP}"
          vagrant ssh ${first_cp} -c "sudo systemctl status keepalived"
-    2. l'apiserver lui-même ne démarre pas :
+    2. the apiserver itself does not start:
          vagrant ssh ${first_cp} -c "sudo crictl ps -a | grep apiserver"
          vagrant ssh ${first_cp} -c "sudo journalctl -u kubelet -n 50"
 EOF
@@ -240,80 +239,80 @@ echo ' OK'
 
 # ============================================================================
 if [ "$CONTROL_PLANES" -gt 1 ]; then
-log "[3/5] Jonction des control planes secondaires"
-# UN SEUL À LA FOIS, et c'est structurel : chaque jonction ajoute un membre à etcd, et
-# etcd n'accepte qu'un changement d'appartenance à la fois. En parallèle, le second
-# échoue avec une erreur de quorum passablement obscure.
+log "[3/5] Joining the secondary control planes"
+# ONE AT A TIME, and this is structural: every join adds a member to etcd, and etcd only
+# accepts one membership change at a time. Run in parallel, the second one fails with a
+# fairly obscure quorum error.
 for ((i = 2; i <= CONTROL_PLANES; i++)); do
   name="${cp_names[$((i-1))]}" ; ip="${cp_ips[$((i-1))]}"
-  rendre kubeadm/templates/kubeadm-join-cp.yaml.tpl "${OUT}/join-${name}.yaml" "$name" "$ip"
+  render kubeadm/templates/kubeadm-join-cp.yaml.tpl "${OUT}/join-${name}.yaml" "$name" "$ip"
   echo "    - ${name} (${ip})"
-  sur_node "$name" "sudo NODE_NAME='${name}' bash /vagrant/kubeadm/node-join.sh"
-  # Pas d'attente supplémentaire ici, et c'est délibéré : `kubeadm join --control-plane`
-  # est DÉJÀ bloquant sur ce point. Il ajoute le membre etcd en `learner`, le promeut,
-  # puis appelle `WaitForClusterAvailable` — il ne rend la main qu'une fois le cluster
-  # etcd de nouveau sain.
-  # (Il y avait ici un `kubectl wait --for=condition=Ready=false` censé « attendre que
-  #  le membre etcd soit vu par l'API ». Il ne faisait rien de tel : un node fraîchement
-  #  joint est déjà Ready=False faute de CNI, donc la condition était satisfaite
-  #  instantanément. Une garde qui ment est pire qu'une absence de garde.)
+  on_node "$name" "sudo NODE_NAME='${name}' bash /vagrant/kubeadm/node-join.sh"
+  # No extra wait here, and that is deliberate: `kubeadm join --control-plane` is ALREADY
+  # blocking on that point. It adds the etcd member as a `learner`, promotes it, then
+  # calls `WaitForClusterAvailable` — it only returns once the etcd cluster is healthy
+  # again.
+  # (There used to be a `kubectl wait --for=condition=Ready=false` here, meant to "wait
+  #  for the etcd member to be seen by the API". It did nothing of the sort: a freshly
+  #  joined node is already Ready=False for lack of a CNI, so the condition was satisfied
+  #  instantly. A guard that lies is worse than no guard at all.)
 done
 else
-log "[3/5] Control plane unique — aucune jonction de CP"
+log "[3/5] Single control plane — no CP to join"
 fi
 
 # ============================================================================
 if [ "$WORKERS" -gt 0 ]; then
-log "[4/5] Jonction des ${WORKERS} worker(s)"
+log "[4/5] Joining the ${WORKERS} worker(s)"
 for ((i = 1; i <= WORKERS; i++)); do
   name="${wk_names[$((i-1))]}" ; ip="${wk_ips[$((i-1))]}"
-  rendre kubeadm/templates/kubeadm-join-worker.yaml.tpl "${OUT}/join-${name}.yaml" "$name" "$ip"
+  render kubeadm/templates/kubeadm-join-worker.yaml.tpl "${OUT}/join-${name}.yaml" "$name" "$ip"
   echo "    - ${name} (${ip})"
-  sur_node "$name" "sudo NODE_NAME='${name}' bash /vagrant/kubeadm/node-join.sh"
+  on_node "$name" "sudo NODE_NAME='${name}' bash /vagrant/kubeadm/node-join.sh"
 done
 else
-log "[4/5] WORKERS=0 — aucun worker à joindre"
+log "[4/5] WORKERS=0 — no worker to join"
 fi
 
 # ============================================================================
 log "[5/5] Finalisation"
 
-# --- Taint des control planes ------------------------------------------------
-# `auto` : on ne déteinte que s'il n'y a aucun worker, sinon plus rien ne pourrait
-# se planifier. C'est le réglage qui rend WORKERS=0 réellement utilisable.
+# --- Control-plane taint -----------------------------------------------------
+# `auto`: we only untaint when there is no worker at all, otherwise nothing could be
+# scheduled any more. This is the setting that makes WORKERS=0 genuinely usable.
 untaint="$(printf '%s' "$UNTAINT_CP" | tr '[:upper:]' '[:lower:]')"
 case "$untaint" in
   auto)  [ "$WORKERS" -eq 0 ] && untaint=true || untaint=false ;;
   true|false) ;;
-  *) echo "    /!\\ UNTAINT_CP='${UNTAINT_CP}' inconnu (auto|true|false) — ignoré." >&2 ; untaint=false ;;
+  *) echo "    /!\\ UNTAINT_CP='${UNTAINT_CP}' unknown (auto|true|false) — ignored." >&2 ; untaint=false ;;
 esac
 if [ "$untaint" = "true" ]; then
-  echo "    - retrait du taint control-plane (les pods pourront s'y planifier)"
+  echo "    - removing the control-plane taint (pods will be schedulable there)"
   kubectl taint nodes --all node-role.kubernetes.io/control-plane- >/dev/null 2>&1 || true
 fi
 
-# --- Étiquetage des workers ---------------------------------------------------
-# kubeadm ne pose AUCUN rôle sur un worker : `kubectl get nodes` affiche `<none>` dans
-# la colonne ROLES, ce qui déroute et casse les sélecteurs `node-role.kubernetes.io/worker`.
+# --- Labelling the workers ---------------------------------------------------
+# kubeadm sets NO role on a worker: `kubectl get nodes` shows `<none>` in the ROLES
+# column, which is confusing and breaks `node-role.kubernetes.io/worker` selectors.
 for name in "${wk_names[@]:-}"; do
   [ -z "$name" ] && continue
   kubectl label node "$name" node-role.kubernetes.io/worker= --overwrite >/dev/null 2>&1 || true
 done
 
-# --- Fiche de faits du cluster, relue par les scripts _k8s/ -------------------
-# L'interface host-only est DÉTECTÉE dans la VM (cf. provision.sh) plutôt que devinée :
-# Debian 13 utilise les noms prédictibles (`enp0s8`) mais certaines box gardent `eth1`,
-# et Cilium a besoin du vrai nom pour son annonce L2.
-# `|| true` INDISPENSABLE : une affectation dont la substitution de commande échoue
-# déclenche `set -e`, et la ligne de repli ci-dessous ne serait jamais atteinte. Le
-# cluster serait alors debout mais `_out/cluster.env` jamais écrit — tous les scripts
-# _k8s/ retomberaient sur `eth1` au lieu de l'interface réelle, Cilium annoncerait en L2
-# sur la mauvaise carte, et aucune UI ne serait joignable. Panne muette par excellence.
-hostonly_if="$(sur_node "$first_cp" "sed -n 's/^HOSTONLY_IF=//p' /etc/kubeadm-lab/node.env" 2>/dev/null \
+# --- The cluster's fact sheet, read back by the _k8s/ scripts ----------------
+# The host-only interface is DETECTED inside the VM (see provision.sh) rather than
+# guessed: Debian 13 uses predictable names (`enp0s8`) but some boxes keep `eth1`, and
+# Cilium needs the real name for its L2 announcement.
+# `|| true` is INDISPENSABLE: an assignment whose command substitution fails triggers
+# `set -e`, and the fallback line below would never be reached. The cluster would then be
+# up but `_out/cluster.env` never written — every _k8s/ script would fall back to `eth1`
+# instead of the real interface, Cilium would announce over L2 on the wrong NIC, and no UI
+# would be reachable. The silent failure par excellence.
+hostonly_if="$(on_node "$first_cp" "sed -n 's/^HOSTONLY_IF=//p' /etc/kubeadm-lab/node.env" 2>/dev/null \
                 | tr -d '[:space:]' || true)"
 hostonly_if="${hostonly_if:-eth1}"
 cat >"${OUT}/cluster.env" <<EOF
-# Généré par kubeadm/cluster-up.sh — relu par les scripts _k8s/*-up.sh.
+# Generated by kubeadm/cluster-up.sh — read back by the _k8s/*-up.sh scripts.
 CLUSTER_NAME=${CLUSTER_NAME}
 K8S_VERSION=${K8S_VERSION}
 VIP=${VIP}
@@ -326,21 +325,21 @@ HOSTONLY_IF=${hostonly_if}
 CONTROL_PLANES=${CONTROL_PLANES}
 WORKERS=${WORKERS}
 EOF
-echo "    - ${OUT}/cluster.env (interface host-only détectée : ${hostonly_if})"
+echo "    - ${OUT}/cluster.env (host-only interface detected: ${hostonly_if})"
 
 # ============================================================================
 echo
 echo "================================================================"
-echo " Cluster prêt."
+echo " Cluster ready."
 echo "   export KUBECONFIG=${REPO_DIR}/kubeconfig"
 echo "   kubectl get nodes -o wide"
 echo "================================================================"
 kubectl get nodes -o wide 2>/dev/null || true
 echo
 if [ "$CNI" = "none" ]; then
-  echo " CNI=none : les nodes resteront NotReady tant que TU n'auras pas posé de CNI."
+  echo " CNI=none: the nodes will stay NotReady until YOU lay down a CNI."
 else
-  echo " Les nodes sont NotReady : c'est NORMAL, aucun CNI n'est encore installé."
-  echo " Étape suivante — la couche applicative (CNI ${CNI}, Gateway, metrics, TLS) :"
+  echo " The nodes are NotReady: this is NORMAL, no CNI is installed yet."
+  echo " Next step — the application layer (CNI ${CNI}, Gateway, metrics, TLS):"
   echo "     ./_k8s/platform-up.sh"
 fi

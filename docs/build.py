@@ -8,28 +8,28 @@
 # ]
 # ///
 """
-build.py — génère `docs/index.html` à partir des README du dépôt.
+build.py — generates `docs/index.html` from the repository READMEs.
 
-Page unique et autonome : aucun CDN, aucun asset externe, aucun serveur.
-Le markdown est converti au build (markdown-it-py, CommonMark + tables) et
-coloré par Pygments ; le JS embarqué ne gère que navigation, recherche, langue,
-thème et boutons « copier ».
+A single, self-contained page: no CDN, no external asset, no server.
+The markdown is converted at build time (markdown-it-py, CommonMark + tables) and
+highlighted by Pygments; the embedded JS only handles navigation, search, language,
+theme and the copy buttons.
 
-Utilisation :
-    ./docs/build.py                  # uv installe les deps à la volée (PEP 723)
+Usage:
+    ./docs/build.py                  # uv installs the deps on the fly (PEP 723)
     uv run docs/build.py --out /tmp/doc.html
-    uv run docs/build.py --strict    # échoue si un lien interne ne résout pas
+    uv run docs/build.py --strict    # fails when an internal link does not resolve
     make docs
 
-BILINGUE : chaque page existe en deux versions, dans le MÊME dossier —
-l'anglais porte le nom canonique (`README.md`, `CLAUDE.md`, `UPGRADE.md`), le
-français son miroir (`LISEZ-MOI.md`, `MISE-A-JOUR.md`), cf.
-MIROIRS. L'anglais est la langue par défaut ; le sélecteur EN/FR de la barre
-latérale bascule tout le site et l'URL (`#fr/kubeadm-upgrade`).
+BILINGUAL: every page exists in two versions, in the SAME directory — English
+carries the canonical name (`README.md`, `CLAUDE.md`, `UPGRADE.md`), French its
+mirror (`LISEZ-MOI.md`, `MISE-A-JOUR.md`), see MIRRORS. English is the default
+language; the EN/FR selector of the side bar switches the whole site and the URL
+(`#fr/kubeadm-upgrade`).
 
-AJOUTER UNE PAGE : rien à faire, tout `*.md` du dépôt est découvert
-automatiquement. Seuls le regroupement du menu et l'emoji viennent de
-GROUPES / EMOJIS ci-dessous ; un dossier inconnu tombe dans « Autres ».
+ADDING A PAGE: nothing to do, every `*.md` of the repository is discovered
+automatically. Only the menu grouping and the emoji come from GROUPS / EMOJIS
+below; an unknown directory falls into "Other".
 """
 
 from __future__ import annotations
@@ -52,117 +52,118 @@ from pygments.formatters import HtmlFormatter
 from pygments.lexers import get_lexer_by_name
 from pygments.util import ClassNotFound
 
-RACINE = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent
 
-# Dossiers jamais explorés (dépendances, artefacts, sortie du générateur).
-# `_k8s` est un SOUS-MODULE (dépôt k8s-playground) : sa documentation est construite et
-# publiée par CE dépôt-là, pas par celui-ci. L'inclure ici produirait deux copies
-# divergentes de la même doc, et casserait le build en CI où le sous-module n'est pas
-# forcément extrait (le dossier y est alors vide). Un lien externe le remplace dans le menu.
-EXCLUS = {".git", ".vagrant", ".terraform", "node_modules", "docs", "iso", "_out", "_k8s"}
+# Directories never explored (dependencies, artifacts, generator output).
+# `_k8s` is a SUBMODULE (the k8s-playground repo): its documentation is built and
+# published by THAT repo, not by this one. Including it here would produce two diverging
+# copies of the same doc, and would break the CI build, where the submodule is not
+# necessarily checked out (the directory is empty there). An external link replaces it
+# in the menu.
+EXCLUDED = {".git", ".vagrant", ".terraform", "node_modules", "docs", "iso", "_out", "_k8s"}
 
-# Pages publiées MÊME si git les ignore. Volontairement VIDE : la page est publiée
-# sur GitHub Pages, où le build ne dispose que des fichiers versionnés. Y forcer un
-# dossier local produirait une page locale différente de la page publiée, et
-# risquerait d'y exposer une configuration privée (domaine réel, clés d'appli).
-# Un addon qui doit apparaître dans la doc doit donc être versionné.
-FORCER: set[str] = set()
+# Pages published EVEN when git ignores them. Deliberately EMPTY: the page is published
+# on GitHub Pages, where the build only has the versioned files. Forcing a local
+# directory in here would produce a local page different from the published one, and
+# could expose a private configuration (real domain, application keys).
+# An addon that must appear in the docs therefore has to be versioned.
+FORCED: set[str] = set()
 
-# --- Langues ----------------------------------------------------------------
-# nom du fichier anglais (canonique) -> nom de son miroir français, même dossier.
-MIROIRS = {
+# --- Languages --------------------------------------------------------------
+# Name of the English (canonical) file -> name of its French mirror, same directory.
+MIRRORS = {
     "README.md":          "LISEZ-MOI.md",
     "UPGRADE.md":         "MISE-A-JOUR.md",
     "TROUBLESHOOTING.md": "DEPANNAGE.md",
 }
 
-# Pages ANGLAIS SEULEMENT par choix : pas de miroir français, et donc pas de badge
-# « pas encore traduit » — ce serait signaler un oubli là où il y a une décision.
-# CLAUDE.md s'adresse aux agents de code, dont la langue de travail est l'anglais.
-SANS_MIROIR = {"CLAUDE.md"}
-LANGUES = ("en", "fr")
-LANGUE_DEFAUT = "en"
+# ENGLISH-ONLY pages by choice: no French mirror, and therefore no "not translated
+# yet" badge — that would flag an oversight where there is a decision.
+# CLAUDE.md addresses coding agents, whose working language is English.
+WITHOUT_MIRROR = {"CLAUDE.md"}
+LANGUAGES = ("en", "fr")
+DEFAULT_LANGUAGE = "en"
 
-# Dépôt public du projet, épinglé ici plutôt que dans le gabarit HTML : c'est la
-# seule URL externe de la page, et le lecteur d'une copie hors ligne doit pouvoir
-# retrouver la source. Le pictogramme est un SVG INLINE (cf. lien_depot) : la page
-# est auto-contenue, donc pas de badge shields.io ni d'icône servie par un CDN.
-DEPOT_URL = "https://github.com/OPS-NC/Vagrant-kubeadm"
+# The project's public repository, pinned here rather than in the HTML template: it is
+# the page's only external URL, and the reader of an offline copy must be able to find
+# the source again. The pictogram is an INLINE SVG (see repo_link): the page is
+# self-contained, so no shields.io badge and no icon served by a CDN.
+REPO_URL = "https://github.com/OPS-NC/Vagrant-kubeadm"
 
-# Documentation de la couche applicative. Elle vit dans le dépôt k8s-playground, monté
-# ici en sous-module sur `_k8s/` et partagé avec le lab Talos : une seule source pour les
-# deux, donc un seul endroit où la maintenir.
-PLATEFORME_URL = "https://ops-nc.github.io/k8s-playground/"
+# Documentation of the application layer. It lives in the k8s-playground repo, mounted
+# here as a submodule on `_k8s/` and shared with the Talos lab: a single source for both,
+# hence a single place to maintain it.
+PLATFORM_URL = "https://ops-nc.github.io/k8s-playground/"
 
-# Bannière « English · Français » posée en tête de chaque fichier pour les
-# lecteurs de GitHub. La page HTML a son propre sélecteur : on la retire.
-RE_BANNIERE = re.compile(r"<!--\s*i18n\s*-->.*?<!--\s*/i18n\s*-->\s*", re.DOTALL)
+# The "English · Français" banner placed at the top of every file for GitHub
+# readers. The HTML page has its own selector, so we strip it.
+RE_BANNER = re.compile(r"<!--\s*i18n\s*-->.*?<!--\s*/i18n\s*-->\s*", re.DOTALL)
 
-# Libellés de l'interface. Tout texte visible du gabarit passe par ici.
-LIBELLES: dict[str, dict[str, str]] = {
+# Interface labels. Every visible string of the template goes through here.
+LABELS: dict[str, dict[str, str]] = {
     "en": {
-        "recherche":       "Search…   /",
-        "recherche_aria":  "Search a page",
-        "sommaire":        "On this page",
-        "copier":          "Copy",
-        "copie":           "Copied!",
-        "echec":           "Failed",
-        "vers_clair":      "Switch to light theme",
-        "vers_sombre":     "Switch to dark theme",
+        "search":       "Search…   /",
+        "search_aria":  "Search a page",
+        "toc":        "On this page",
+        "copy":              "Copy",
+        "copied":           "Copied!",
+        "failed":           "Failed",
+        "to_light":      "Switch to light theme",
+        "to_dark":     "Switch to dark theme",
         "theme_aria":      "Documentation theme",
-        "theme_clair":     "Light",
-        "theme_sombre":    "Dark",
+        "theme_light":     "Light",
+        "theme_dark":    "Dark",
         "menu":            "Open the menu",
-        "langue_aria":     "Documentation language",
+        "lang_aria":     "Documentation language",
         "source":          "Source:",
         "sections":        "sections",
         "badge":           "untracked",
-        "badge_titre":     "Not in git: local directory",
-        "badge_langue":    "EN",
-        "badge_langue_titre": "Not translated yet — English page shown",
-        "depot":           "GitHub repository",
-        "plateforme":      "Application layer (k8s-playground)",
-        "plateforme_court": "Platform",
-        "sous_titre":      "Kubernetes lab built with kubeadm on VirtualBox, driven by Vagrant.",
+        "badge_title":     "Not in git: local directory",
+        "badge_lang":    "EN",
+        "badge_lang_title": "Not translated yet — English page shown",
+        "repo":           "GitHub repository",
+        "platform":      "Application layer (k8s-playground)",
+        "platform_short": "Platform",
+        "subtitle":      "Kubernetes lab built with kubeadm on VirtualBox, driven by Vagrant.",
     },
     "fr": {
-        "recherche":       "Rechercher…   /",
-        "recherche_aria":  "Rechercher une page",
-        "sommaire":        "Sur cette page",
-        "copier":          "Copier",
-        "copie":           "Copié !",
-        "echec":           "Échec",
-        "vers_clair":      "Passer en clair",
-        "vers_sombre":     "Passer en sombre",
+        "search":       "Rechercher…   /",
+        "search_aria":  "Rechercher une page",
+        "toc":        "Sur cette page",
+        "copy":              "Copier",
+        "copied":           "Copié !",
+        "failed":           "Échec",
+        "to_light":      "Passer en clair",
+        "to_dark":     "Passer en sombre",
         "theme_aria":      "Thème de la documentation",
-        "theme_clair":     "Clair",
-        "theme_sombre":    "Sombre",
+        "theme_light":     "Clair",
+        "theme_dark":    "Sombre",
         "menu":            "Ouvrir le menu",
-        "langue_aria":     "Langue de la documentation",
+        "lang_aria":     "Langue de la documentation",
         "source":          "Source :",
         "sections":        "sections",
         "badge":           "non commité",
-        "badge_titre":     "Absent de git : dossier local",
-        "badge_langue":    "EN",
-        "badge_langue_titre": "Pas encore traduit — page anglaise affichée",
-        "depot":           "Dépôt GitHub",
-        "plateforme":      "Couche applicative (k8s-playground)",
-        "plateforme_court": "Plateforme",
-        "sous_titre":      "Lab Kubernetes monté avec kubeadm sur VirtualBox, piloté par Vagrant.",
+        "badge_title":     "Absent de git : dossier local",
+        "badge_lang":    "EN",
+        "badge_lang_title": "Pas encore traduit — page anglaise affichée",
+        "repo":           "Dépôt GitHub",
+        "platform":      "Couche applicative (k8s-playground)",
+        "platform_short": "Plateforme",
+        "subtitle":      "Lab Kubernetes monté avec kubeadm sur VirtualBox, piloté par Vagrant.",
     },
 }
 
-# --- Plan du menu -----------------------------------------------------------
-# (titres par langue, emoji, chemins ANGLAIS ou dossiers, dans l'ordre d'affichage)
-GROUPES: list[tuple[dict[str, str], str, list[str]]] = [
+# --- Menu layout ------------------------------------------------------------
+# (headings per language, emoji, ENGLISH paths or directories, in display order)
+GROUPS: list[tuple[dict[str, str], str, list[str]]] = [
     ({"en": "The lab",  "fr": "Le lab"}, "🏠",
      ["README.md", "kubeadm/UPGRADE.md", "TROUBLESHOOTING.md"]),
-    # Les groupes Réseau / Stockage / Secrets / Observabilité / Sécurité / Démos ont été
-    # retirés avec le passage de `_k8s/` en sous-module : ces pages appartiennent au dépôt
-    # k8s-playground, qui publie sa propre documentation (cf. PLATEFORME_URL).
+    # The Network / Storage / Secrets / Observability / Security / Demos groups were
+    # removed when `_k8s/` became a submodule: those pages belong to the k8s-playground
+    # repo, which publishes its own documentation (see PLATFORM_URL).
     ({"en": "AI agent", "fr": "Agent IA"}, "🤖", ["CLAUDE.md"]),
 ]
-AUTRES = {"en": "Other", "fr": "Autres"}
+OTHER = {"en": "Other", "fr": "Autres"}
 
 EMOJIS: dict[str, str] = {
     "README.md":            "🏠",
@@ -171,12 +172,12 @@ EMOJIS: dict[str, str] = {
     "kubeadm/UPGRADE.md":   "⬆️",
 }
 
-# Encarts : un marqueur en tête de citation choisit la couleur. Les deux langues
-# partagent la table, d'où les marqueurs FR *et* EN.
-ENCARTS: list[tuple[str, tuple[str, ...]]] = [
+# Callouts: a marker at the start of a blockquote picks the colour. Both languages
+# share the table, hence the FR *and* EN markers.
+CALLOUTS: list[tuple[str, tuple[str, ...]]] = [
     ("danger", ("⚠️", "🚨", "❌", "attention", "danger", "jamais", "ne pas", "ne jamais",
                 "never", "do not", "don't", "warning")),
-    ("astuce", ("💡", "✅", "🎯", "astuce", "conseil", "bon à savoir",
+    ("tip",    ("💡", "✅", "🎯", "astuce", "conseil", "bon à savoir",
                 "tip", "good to know")),
     ("info",   ("ℹ️", "📌", "📝", "🔍", "nb ", "nb :", "note", "remarque", "réf",
                 "ref", "reminder")),
@@ -184,293 +185,293 @@ ENCARTS: list[tuple[str, tuple[str, ...]]] = [
 
 
 # ===========================================================================
-#  Découverte des pages
+#  Page discovery
 # ===========================================================================
 
 def git(*args: str) -> str:
-    """Appelle git dans le dépôt ; chaîne vide si git est absent ou en erreur."""
+    """Calls git in the repository; empty string when git is missing or errors out."""
     try:
-        return subprocess.run(["git", "-C", str(RACINE), *args],
+        return subprocess.run(["git", "-C", str(ROOT), *args],
                               capture_output=True, text=True, check=True).stdout.strip()
     except (subprocess.CalledProcessError, FileNotFoundError):
         return ""
 
 
-def ignores(chemins: list[str]) -> set[str]:
-    """Sous-ensemble des chemins que git ignore (ex. le projet local proxmox/).
+def ignores(paths: list[str]) -> set[str]:
+    """Subset of the paths git ignores (e.g. the local proxmox/ project).
 
-    On documente le dépôt, pas les dossiers de travail locaux — mais un fichier
-    simplement *untracked* reste publié, avec un badge.
+    We document the repository, not the local working directories — but a file that is
+    merely *untracked* is still published, with a badge.
     """
-    if not chemins:
+    if not paths:
         return set()
     try:
-        res = subprocess.run(["git", "-C", str(RACINE), "check-ignore", "--stdin"],
-                             input="\n".join(chemins), capture_output=True, text=True,
+        res = subprocess.run(["git", "-C", str(ROOT), "check-ignore", "--stdin"],
+                             input="\n".join(paths), capture_output=True, text=True,
                              check=False)
-        return set(res.stdout.split())      # rc=1 quand rien n'est ignoré : normal
+        return set(res.stdout.split())      # rc=1 when nothing is ignored: normal
     except FileNotFoundError:
         return set()
 
 
-def lire(chemin: str) -> str:
-    """Texte d'une page, bannière de langue retirée."""
-    return RE_BANNIERE.sub("", (RACINE / chemin).read_text(encoding="utf-8"), count=1).lstrip()
+def read_file(path: str) -> str:
+    """A page's text, with the language banner stripped."""
+    return RE_BANNER.sub("", (ROOT / path).read_text(encoding="utf-8"), count=1).lstrip()
 
 
-def decouvrir() -> list[dict]:
-    """Liste les documents du dépôt (une entrée par paire EN/FR), selon GROUPES."""
-    suivis = set(git("ls-files", "*.md").split())
-    trouves = sorted(
-        p.relative_to(RACINE).as_posix()
-        for p in RACINE.rglob("*.md")
-        if not (EXCLUS & set(p.relative_to(RACINE).parts))
+def discover() -> list[dict]:
+    """Lists the repository documents (one entry per EN/FR pair), following GROUPS."""
+    tracked_files = set(git("ls-files", "*.md").split())
+    found = sorted(
+        p.relative_to(ROOT).as_posix()
+        for p in ROOT.rglob("*.md")
+        if not (EXCLUDED & set(p.relative_to(ROOT).parts))
     )
-    exclus = ignores(trouves) - FORCER
-    restants = [c for c in trouves if c not in exclus]
+    excluded = ignores(found) - FORCED
+    remaining = [c for c in found if c not in excluded]
 
-    # apparie chaque page anglaise avec son miroir français, qui sort de la liste :
-    # ce n'est pas un document de plus, c'est l'autre version du même document.
-    miroir_de: dict[str, str] = {}
-    for chemin in list(restants):
-        p = Path(chemin)
-        if p.name in MIROIRS:
-            fr = (p.parent / MIROIRS[p.name]).as_posix()
-            if fr in restants:
-                miroir_de[chemin] = fr
-                restants.remove(fr)
+    # pairs every English page with its French mirror, which leaves the list:
+    # it is not one more document, it is the other version of the same document.
+    mirror_of: dict[str, str] = {}
+    for path in list(remaining):
+        p = Path(path)
+        if p.name in MIRRORS:
+            fr = (p.parent / MIRRORS[p.name]).as_posix()
+            if fr in remaining:
+                mirror_of[path] = fr
+                remaining.remove(fr)
 
     docs: list[dict] = []
 
-    def prendre(chemin: str, groupe: dict[str, str], emoji_defaut: str) -> None:
-        restants.remove(chemin)
-        fr = miroir_de.get(chemin, chemin)      # sans miroir : le FR retombe sur l'EN
+    def take(path: str, group: dict[str, str], default_emoji: str) -> None:
+        remaining.remove(path)
+        fr = mirror_of.get(path, path)      # without a mirror: FR falls back to EN
         docs.append({
-            "chemin": chemin,                   # chemin canonique (anglais)
-            "chemins": {"en": chemin, "fr": fr},
-            "groupe": groupe,
-            "emoji": EMOJIS.get(chemin, emoji_defaut),
-            # sans git on ne peut rien affirmer : on ne signale rien
-            "suivi": chemin in suivis or not suivis,
+            "path": path,                   # path canonique (anglais)
+            "paths": {"en": path, "fr": fr},
+            "group": group,
+            "emoji": EMOJIS.get(path, default_emoji),
+            # without git we cannot assert anything: we flag nothing
+            "tracked": path in tracked_files or not tracked_files,
         })
 
-    for groupe, emoji, entrees in GROUPES:
-        for entree in entrees:
-            if entree.endswith(".md"):
-                if entree in restants:
-                    prendre(entree, groupe, emoji)
+    for group, emoji, entries in GROUPS:
+        for entry in entries:
+            if entry.endswith(".md"):
+                if entry in remaining:
+                    take(entry, group, emoji)
             else:  # un dossier : ses pages canoniques, la moins profonde d'abord
-                for chemin in sorted((c for c in list(restants)
-                                      if c.startswith(entree + "/")
-                                      and Path(c).name in MIROIRS),
+                for path in sorted((c for c in list(remaining)
+                                      if c.startswith(entry + "/")
+                                      and Path(c).name in MIRRORS),
                                      key=lambda c: (c.count("/"), c)):
-                    prendre(chemin, groupe, emoji)
+                    take(path, group, emoji)
 
-    for chemin in list(restants):     # rien ne disparaît du menu
-        prendre(chemin, AUTRES, "📄")
+    for path in list(remaining):     # nothing disappears from the menu
+        take(path, OTHER, "📄")
     return docs
 
 
 # ===========================================================================
-#  Conversion markdown → HTML
+#  Markdown → HTML conversion
 # ===========================================================================
 
-# Emoji en tête de titre : les README commencent par un emoji (contrat de style),
+# Emoji en tête de title : les README commencent par un emoji (contrat de style),
 # et le générateur en ajoute un. Sans séparation, ils apparaîtraient en double.
-# La répétition tolère les espaces, pour qu'un titre en portant plusieurs
-# (`# 🏠 🐧 Vagrant-KubeADM`) les garde tous groupés dans l'en-tête.
-RE_EMOJI_INITIAL = re.compile(
+# The repetition tolerates spaces, so a heading carrying several of them
+# (`# 🏠 🐧 Vagrant-KubeADM`) keeps them all grouped in the header.
+RE_LEADING_EMOJI = re.compile(
     r"^((?:[\U0001F000-\U0001FAFF←-⇿⌀-➿⬀-⯿]"
     r"[︎️‍]*[ \t]*)+)"
 )
 
 
-def separer_emoji(titre: str) -> tuple[str, str]:
-    """Détache le ou les emoji de tête d'un titre : (emoji, reste)."""
-    m = RE_EMOJI_INITIAL.match(titre)
-    return (m.group(1).strip(), titre[m.end():].lstrip()) if m else ("", titre)
+def split_emoji(title: str) -> tuple[str, str]:
+    """Detaches the leading emoji (or emojis) of a heading: (emoji, rest)."""
+    m = RE_LEADING_EMOJI.match(title)
+    return (m.group(1).strip(), title[m.end():].lstrip()) if m else ("", title)
 
 
-def sans_markdown(texte: str) -> str:
-    """Texte brut d'un titre (menu, onglet, recherche) : le balisage est retiré."""
-    texte = re.sub(r"`([^`]*)`", r"\1", texte)
-    texte = re.sub(r"\*\*([^*]*)\*\*", r"\1", texte)
-    texte = re.sub(r"\*([^*]*)\*", r"\1", texte)
-    texte = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", texte)
-    return texte.strip()
+def strip_markdown(text: str) -> str:
+    """Plain text of a heading (menu, tab, search): the markup is stripped."""
+    text = re.sub(r"`([^`]*)`", r"\1", text)
+    text = re.sub(r"\*\*([^*]*)\*\*", r"\1", text)
+    text = re.sub(r"\*([^*]*)\*", r"\1", text)
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    return text.strip()
 
 
-def ancre(titre: str) -> str:
-    """Slug façon GitHub : minuscules, accents gardés, ponctuation et emoji retirés.
+def anchor(title: str) -> str:
+    """GitHub-style slug: lowercase, accents kept, punctuation and emoji removed.
 
-    Les titres du dépôt commencent par un emoji (`## 🚑 7. Dépannage`) : sans le
-    `strip("-")` final, le slug hériterait d'un tiret de tête.
+    The repository headings start with an emoji (`## 🚑 7. Dépannage`): without the
+    trailing `strip("-")`, the slug would inherit a leading dash.
     """
-    slug = "".join(c for c in titre.lower() if c.isalnum() or c in " -_")
+    slug = "".join(c for c in title.lower() if c.isalnum() or c in " -_")
     return re.sub(r"[\s-]+", "-", slug).strip("-_")
 
 
-def creer_convertisseur() -> MarkdownIt:
-    """CommonMark + tables + HTML brut (`<details>`) + ancres sur les titres."""
+def create_converter() -> MarkdownIt:
+    """CommonMark + tables + raw HTML (`<details>`) + anchors on the headings."""
     md = (
         MarkdownIt("commonmark", {"html": True, "linkify": True, "breaks": False})
         .enable(["table", "strikethrough"])
         .use(anchors_plugin, max_level=4, permalink=True, permalinkSymbol="#",
-             permalinkSpace=False, slug_func=ancre)
+             permalinkSpace=False, slug_func=anchor)
     )
-    md.add_render_rule("fence", _rendre_fence)
+    md.add_render_rule("fence", _render_fence)
     return md
 
 
-def _rendre_fence(self, tokens: list[Token], idx: int, options, env) -> str:
-    """Bloc de code : coloration Pygments + bouton copier + étiquette de langage.
+def _render_fence(self, tokens: list[Token], idx: int, options, env) -> str:
+    """Code block: Pygments highlighting + copy button + language label.
 
-    Le bouton n'a pas de libellé au build : il est posé par le JS dans la langue
-    active, sinon basculer FR/EN laisserait des « Copier » dans la page anglaise.
+    The button carries no label at build time: the JS sets it in the active language,
+    otherwise switching FR/EN would leave "Copier" behind in the English page.
     """
-    jeton = tokens[idx]
-    # `jeton.info` vaut " " (et non "") quand la clôture du bloc porte une espace en
-    # fin de ligne — une chaîne d'espaces est TRUTHY, donc l'ancien test `if jeton.info`
-    # passait, et `"".split()[0]` levait une IndexError qui tuait toute la génération.
-    # On découpe d'abord, on indexe ensuite : plus de branche à faire mentir.
-    morceaux = (jeton.info or "").strip().split()
-    langage = morceaux[0].lower() if morceaux else ""
+    tok = tokens[idx]
+    # `tok.info` is " " (and not "") when the block's closing fence carries a trailing
+    # space — a string of spaces is TRUTHY, so the old `if tok.info` test passed, and
+    # `"".split()[0]` raised an IndexError that killed the whole generation.
+    # We split first and index second: no branch left to lie to us.
+    parts = (tok.info or "").strip().split()
+    language = parts[0].lower() if parts else ""
     try:
-        corps = highlight(jeton.content, get_lexer_by_name(langage or "text"),
+        body = highlight(tok.content, get_lexer_by_name(language or "text"),
                           HtmlFormatter(nowrap=True))
     except ClassNotFound:
-        corps = html.escape(jeton.content, quote=False)
-    etiquette = {"bash": "shell", "sh": "shell", "yml": "yaml", "": "text"}.get(langage, langage)
+        body = html.escape(tok.content, quote=False)
+    label_text = {"bash": "shell", "sh": "shell", "yml": "yaml", "": "text"}.get(language, language)
     return (
-        f'<figure class="bloc-code" data-langage="{html.escape(etiquette, quote=True)}">'
-        f'<button class="copier" type="button"></button>'
-        f'<pre><code>{corps}</code></pre></figure>'
+        f'<figure class="code-block" data-language="{html.escape(label_text, quote=True)}">'
+        f'<button class="copy-btn" type="button"></button>'
+        f'<pre><code>{body}</code></pre></figure>'
     )
 
 
-def genre_encart(texte: str) -> str:
-    """Choisit le style d'un encart d'après le début de son texte."""
-    debut = texte.lstrip().lower()[:48]
-    for nom, marqueurs in ENCARTS:
-        if any(m in debut for m in marqueurs):
-            return nom
-    return "neutre"
+def callout_kind(text: str) -> str:
+    """Picks a callout's style from the beginning of its text."""
+    debut = text.lstrip().lower()[:48]
+    for name, markers in CALLOUTS:
+        if any(m in debut for m in markers):
+            return name
+    return "neutral"
 
 
-def preparer(jetons: list[Token]) -> tuple[str | None, list[dict]]:
-    """Annote les jetons (encarts, tableaux scrollables) et relève le sommaire.
+def prepare(token_list: list[Token]) -> tuple[str | None, list[dict]]:
+    """Annotates the tokens (callouts, scrollable tables) and collects the TOC.
 
-    Retourne (titre H1, sommaire) ; le H1 est retiré du corps, il sert d'en-tête.
+    Returns (H1 heading, TOC); the H1 is removed from the body, it serves as the header.
     """
-    titre_h1: str | None = None
-    sommaire: list[dict] = []
+    h1_title: str | None = None
+    toc: list[dict] = []
 
-    for i, jeton in enumerate(jetons):
-        if jeton.type == "blockquote_open":
-            # le premier inline de la citation détermine la couleur de l'encart
-            suite = next((t for t in jetons[i + 1:i + 6] if t.type == "inline"), None)
-            jeton.attrJoin("class", f"encart encart-{genre_encart(suite.content if suite else '')}")
+    for i, tok in enumerate(token_list):
+        if tok.type == "blockquote_open":
+            # the blockquote's first inline determines the callout colour
+            rest = next((t for t in token_list[i + 1:i + 6] if t.type == "inline"), None)
+            tok.attrJoin("class", f"callout callout-{callout_kind(rest.content if rest else '')}")
 
-        elif jeton.type == "heading_open":
-            inline = jetons[i + 1]
-            texte = re.sub(r"\s*#\s*$", "", inline.content).strip()
-            if jeton.tag == "h1" and titre_h1 is None:
-                titre_h1 = texte
-                # neutralise le H1 : il est réaffiché dans l'en-tête de page
-                jeton.type, jeton.tag, jeton.hidden = "html_block", "", True
-                jeton.content = ""
+        elif tok.type == "heading_open":
+            inline = token_list[i + 1]
+            text = re.sub(r"\s*#\s*$", "", inline.content).strip()
+            if tok.tag == "h1" and h1_title is None:
+                h1_title = text
+                # neutralises the H1: it is redisplayed in the page header
+                tok.type, tok.tag, tok.hidden = "html_block", "", True
+                tok.content = ""
                 inline.children, inline.content = [], ""
-                jetons[i + 2].hidden = True
-            elif jeton.tag in ("h2", "h3"):
-                sommaire.append({"niveau": jeton.tag, "titre": texte,
-                                 "ancre": jeton.attrGet("id") or ""})
+                token_list[i + 2].hidden = True
+            elif tok.tag in ("h2", "h3"):
+                toc.append({"level": tok.tag, "title": text,
+                                 "anchor": tok.attrGet("id") or ""})
 
-    return titre_h1, sommaire
+    return h1_title, toc
 
 
-def convertir(md: MarkdownIt, page: dict) -> dict:
-    """Rend une page et renvoie tout ce dont le gabarit a besoin.
+def convert(md: MarkdownIt, page: dict) -> dict:
+    """Renders a page and returns everything the template needs.
 
-    Le titre est décliné en trois formes : l'emoji (détaché du H1), le titre
-    formaté (le `code` du markdown devient un vrai <code>) et le titre brut
-    (menu, onglet, recherche).
+    The title comes in three forms: the emoji (detached from the H1), the formatted
+    title (markdown `code` becomes a real <code>) and the raw title
+    (menu, onglet, search).
     """
-    jetons = md.parse(page["texte"])
-    titre_brut, sommaire = preparer(jetons)
-    corps = md.renderer.render(jetons, md.options, {})
+    token_list = md.parse(page["text"])
+    raw_title, toc = prepare(token_list)
+    body = md.renderer.render(token_list, md.options, {})
 
-    # tableaux : encapsulés pour pouvoir défiler horizontalement sur mobile
-    corps = corps.replace("<table>", '<div class="table-scroll"><table>')
-    corps = corps.replace("</table>", "</table></div>")
-    # les ancres pointent vers la route interne #<page>/<section>
-    corps = re.sub(r'(class="header-anchor" href=")#',
-                   rf"\1#{page['id']}/", corps)
+    # tables: wrapped so they can scroll horizontally on mobile
+    body = body.replace("<table>", '<div class="table-scroll"><table>')
+    body = body.replace("</table>", "</table></div>")
+    # the anchors point at the internal route #<page>/<section>
+    body = re.sub(r'(class="header-anchor" href=")#',
+                   rf"\1#{page['id']}/", body)
 
-    titre_brut = titre_brut or Path(page["chemin"]).parent.name or page["chemin"]
-    emoji, titre_brut = separer_emoji(titre_brut)
+    raw_title = raw_title or Path(page["path"]).parent.name or page["path"]
+    emoji, raw_title = split_emoji(raw_title)
     return {
-        "corps": corps,
-        "sommaire": sommaire,
-        # l'emoji du README prime ; sinon celui de la table EMOJIS / du groupe
+        "body": body,
+        "toc": toc,
+        # the README emoji wins; otherwise the one from the EMOJIS table / the group
         "emoji": emoji or page["emoji"],
-        "titre_html": md.renderInline(titre_brut),
-        "titre_texte": sans_markdown(titre_brut),
+        "title_html": md.renderInline(raw_title),
+        "title_text": strip_markdown(raw_title),
     }
 
 
 # ===========================================================================
-#  Liens internes : `foo/README.md#ancre` → route `#en/foo-readme/ancre`
+#  Internal links: `foo/README.md#anchor` → route `#en/foo-readme/anchor`
 # ===========================================================================
 
-RE_LIEN_MD = re.compile(r'href="([^":#?]+\.md)(#[^"]*)?"')
-RE_ID_TITRE = re.compile(r'<h[1-6][^>]*\sid="([^"]+)"')
+RE_MD_LINK = re.compile(r'href="([^":#?]+\.md)(#[^"]*)?"')
+RE_HEADING_ID = re.compile(r'<h[1-6][^>]*\sid="([^"]+)"')
 
 
-def resoudre(rendu: dict, index: dict[str, dict[str, str]],
-             ancres: dict[str, set[str]], alertes: list[str]) -> str:
-    """Réécrit les liens `*.md` du corps en routes internes de la page unique.
+def resolve(rendered: dict, index: dict[str, dict[str, str]],
+             anchors: dict[str, set[str]], warnings: list[str]) -> str:
+    """Rewrites the body's `*.md` links into internal routes of the single page.
 
-    Sans cette passe, `[cilium/](../cilium/README.md)` resterait un lien
-    *fichier* : cliquable sur GitHub, mort sur GitHub Pages. Le fragment est
-    réconcilié avec les ancres réellement générées côté cible — les ancres
-    GitHub gardent le tiret de tête laissé par l'emoji du titre, les nôtres non.
+    Without this pass, `[cilium/](../cilium/README.md)` would stay a *file* link:
+    clickable on GitHub, dead on GitHub Pages. The fragment is
+    reconciled with the anchors actually generated on the target side — GitHub anchors
+    keep the leading dash left by the heading emoji, ours do not.
     """
-    base = Path(rendu["chemin"]).parent
-    table = index[rendu["langue"]]
+    base = Path(rendered["path"]).parent
+    table = index[rendered["lang"]]
 
-    def remplacer(m: re.Match[str]) -> str:
-        # `Path(cible)` est RELATIF : `.resolve()` le résolvait contre le cwd du
-        # processus et non contre RACINE. Le garde testait donc un chemin pendant que
-        # `.resolve()` en calculait un autre, d'où un `ValueError: not in the subpath
-        # of` NON ATTRAPÉ qui faisait planter toute la génération — dès qu'on lançait
-        # build.py depuis un autre répertoire que la racine, ou dès qu'un lien sortait
-        # du dépôt (`../voisin/README.md`), auquel cas `--strict` plantait au lieu de
-        # signaler proprement le lien cassé.
-        # On résout explicitement depuis RACINE, et on ne convertit que si la cible
-        # reste dans le dépôt. `unquote` pour rester cohérent avec le traitement des
-        # fragments plus bas (un nom de fichier accentué arrive percent-encodé).
-        cible = (base / unquote(m.group(1))).as_posix()
-        absolu = (RACINE / cible).resolve()
-        if absolu.is_relative_to(RACINE):
-            cible = absolu.relative_to(RACINE).as_posix()
-        id_cible = table.get(cible)
-        if not id_cible:
-            alertes.append(f"{rendu['chemin']} → {m.group(1)} (page absente de la doc)")
+    def replace_md(m: re.Match[str]) -> str:
+        # `Path(target)` is RELATIVE: `.resolve()` used to resolve it against the
+        # process cwd and not against ROOT. So the guard tested one path while
+        # `.resolve()` computed another, hence an UNCAUGHT `ValueError: not in the
+        # subpath of` that crashed the whole generation — as soon as build.py was run
+        # from a directory other than the root, or as soon as a link pointed outside the
+        # repo (`../neighbour/README.md`), in which case `--strict` crashed instead of
+        # cleanly reporting the broken link.
+        # We resolve explicitly from ROOT, and only convert when the target stays inside
+        # the repo. `unquote` keeps this consistent with the fragment handling below (an
+        # accented file name arrives percent-encoded).
+        target = (base / unquote(m.group(1))).as_posix()
+        absolute = (ROOT / target).resolve()
+        if absolute.is_relative_to(ROOT):
+            target = absolute.relative_to(ROOT).as_posix()
+        target_id = table.get(target)
+        if not target_id:
+            warnings.append(f"{rendered['path']} → {m.group(1)} (page absente de la doc)")
             return m.group(0)
-        # markdown-it percent-encode les caractères non ASCII : les ancres françaises
-        # (`#-accès-distant-…`) arrivent ici en `%C3%A8`, à décoder avant comparaison.
+        # markdown-it percent-encodes non-ASCII characters: French anchors
+        # (`#-accès-distant-…`) arrive here as `%C3%A8`, to be decoded before comparing.
         frag = unquote((m.group(2) or "")[1:])
         if frag:
-            for essai in (frag, frag.strip("-_"), ancre(frag)):
-                if essai in ancres[id_cible]:
-                    frag = essai
+            for attempt in (frag, frag.strip("-_"), anchor(frag)):
+                if attempt in anchors[target_id]:
+                    frag = attempt
                     break
             else:
-                alertes.append(f"{rendu['chemin']} → {m.group(1)}#{frag} (ancre inconnue)")
+                warnings.append(f"{rendered['path']} → {m.group(1)}#{frag} (anchor inconnue)")
                 frag = ""
-        return f'href="#{id_cible}{"/" + frag if frag else ""}"'
+        return f'href="#{target_id}{"/" + frag if frag else ""}"'
 
-    return RE_LIEN_MD.sub(remplacer, rendu["corps"])
+    return RE_MD_LINK.sub(replace_md, rendered["body"])
 
 
 RE_IMG_SRC = re.compile(r'(<img\b[^>]*?\bsrc=")([^"]+)(")', re.IGNORECASE)
@@ -478,537 +479,536 @@ MIMES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
          ".gif": "image/gif", ".svg": "image/svg+xml", ".webp": "image/webp"}
 
 
-def inliner_images(corps: str, chemin: str, alertes: list[str]) -> str:
-    """Convertit les images LOCALES du corps en data: URI base64.
+def inline_images(body: str, path: str, warnings: list[str]) -> str:
+    """Converts the body's LOCAL images into base64 data: URIs.
 
-    Le chemin écrit dans le markdown est relatif au fichier source, donc juste
-    pour GitHub ; il ne résoudrait pas depuis la page unique, qui vit ailleurs
-    (`docs/index.html` en local, `_site/index.html` en CI). Plutôt que copier
-    les fichiers à côté de la sortie, on les embarque : la page reste UN seul
-    fichier autonome, transportable et lisible hors ligne — la promesse tenue
-    partout ailleurs dans ce générateur.
+    The path written in the markdown is relative to the source file, so it is right
+    for GitHub only; it would not resolve from the single page, which lives elsewhere
+    (`docs/index.html` locally, `_site/index.html` in CI). Rather than copying the
+    files next to the output, we embed them: the page stays ONE self-contained file,
+    portable and readable offline — the promise kept everywhere else in this generator.
 
-    Corollaire : garder les images LÉGÈRES, elles gonflent la page d'environ
-    4/3 de leur poids (surcoût du base64).
+    Corollary: keep the images LIGHT, they inflate the page by roughly 4/3 of their
+    own weight (base64 overhead).
     """
-    base = Path(chemin).parent
+    base = Path(path).parent
 
-    def remplacer(m: re.Match[str]) -> str:
+    def replace_md(m: re.Match[str]) -> str:
         src = m.group(2)
         if src.startswith(("http://", "https://", "data:", "//")):
             return m.group(0)                      # ressource externe : intacte
-        fichier = (RACINE / base / unquote(src)).resolve()
-        if not fichier.is_file():
-            alertes.append(f"{chemin} → {src} (image introuvable)")
+        file_path = (ROOT / base / unquote(src)).resolve()
+        if not file_path.is_file():
+            warnings.append(f"{path} → {src} (image introuvable)")
             return m.group(0)
-        mime = MIMES.get(fichier.suffix.lower())
+        mime = MIMES.get(file_path.suffix.lower())
         if mime is None:
-            alertes.append(f"{chemin} → {src} (format d'image non géré)")
+            warnings.append(f"{path} → {src} (unsupported image format)")
             return m.group(0)
-        donnees = base64.b64encode(fichier.read_bytes()).decode("ascii")
-        return f"{m.group(1)}data:{mime};base64,{donnees}{m.group(3)}"
+        data = base64.b64encode(file_path.read_bytes()).decode("ascii")
+        return f"{m.group(1)}data:{mime};base64,{data}{m.group(3)}"
 
-    return RE_IMG_SRC.sub(remplacer, corps)
+    return RE_IMG_SRC.sub(replace_md, body)
 
 
 # ===========================================================================
-#  Feuille de style
+#  Stylesheet
 # ===========================================================================
 
 def css_pygments() -> str:
-    """Thèmes de coloration Pygments, alignés sur la logique de la palette.
+    """Pygments highlighting themes, aligned with the palette's own logic.
 
-    Même règle que les variables CSS : le SOMBRE est le défaut, le clair ne
-    s'applique que si le lecteur l'a explicitement choisi. Sans ça, les blocs de
-    code resteraient colorés en thème clair sur une page sombre.
+    Same rule as the CSS variables: DARK is the default, light only applies when the
+    reader explicitly chose it. Without that, code blocks would stay highlighted in the
+    light theme on a dark page.
     """
-    def defs(style: str, selecteur: str) -> str:
+    def defs(style: str, selector: str) -> str:
         try:
-            return HtmlFormatter(style=style).get_style_defs(selecteur)
+            return HtmlFormatter(style=style).get_style_defs(selector)
         except ClassNotFound:
-            return HtmlFormatter().get_style_defs(selecteur)
+            return HtmlFormatter().get_style_defs(selector)
 
-    sombre = defs("github-dark", ':root:not([data-theme="light"]) .bloc-code pre')
-    clair = defs("friendly", ':root[data-theme="light"] .bloc-code pre')
+    dark = defs("github-dark", ':root:not([data-theme="light"]) .code-block pre')
+    light = defs("friendly", ':root[data-theme="light"] .code-block pre')
     return (
-        f"{sombre}\n{clair}\n"
-        # le fond des blocs vient de nos variables, pas du thème Pygments
-        ".bloc-code pre{background:none!important}\n"
+        f"{dark}\n{light}\n"
+        # the blocks' background comes from our variables, not from the Pygments theme
+        ".code-block pre{background:none!important}\n"
     )
 
 
-PALETTE_SOMBRE = """
-  --fond:#15161a; --fond-2:#1c1e23; --fond-3:#24272d;
-  --texte:#e9eaec; --texte-2:#a5a9b2; --texte-3:#7a7f88;
-  --bord:#2b2e35; --bord-fort:#3a3e46;
-  --accent:#74a0f7; --accent-doux:#1b2436;
-  --code-fond:#1a1c20;
-  --danger:#f28b80; --danger-fond:#2a1c1b;
-  --astuce:#6bc99a; --astuce-fond:#14231f;
-  --info:#74a0f7;   --info-fond:#171f2e;
-  --ombre:0 1px 2px rgba(0,0,0,.3),0 4px 14px rgba(0,0,0,.24);
+DARK_PALETTE = """
+  --bg:#15161a; --bg-2:#1c1e23; --bg-3:#24272d;
+  --text:#e9eaec; --text-2:#a5a9b2; --text-3:#7a7f88;
+  --border:#2b2e35; --border-strong:#3a3e46;
+  --accent:#74a0f7; --accent-soft:#1b2436;
+  --code-bg:#1a1c20;
+  --danger:#f28b80; --danger-bg:#2a1c1b;
+  --tip:#6bc99a; --tip-bg:#14231f;
+  --info:#74a0f7;   --info-bg:#171f2e;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 4px 14px rgba(0,0,0,.24);
 """
 
 CSS = """
 *,*::before,*::after{box-sizing:border-box}
 :root{
-  --fond:#fdfdfc; --fond-2:#f5f5f3; --fond-3:#ebebe7;
-  --texte:#1b1c1f; --texte-2:#5b5e65; --texte-3:#8a8e95;
-  --bord:#e3e3df; --bord-fort:#cecec8;
-  --accent:#2f6feb; --accent-doux:#eaf1fe;
-  --code-fond:#f8f8f6;
-  --danger:#c4342b; --danger-fond:#fdf1f0;
-  --astuce:#177f50; --astuce-fond:#eff8f3;
-  --info:#2f6feb;   --info-fond:#eff4fe;
-  --ombre:0 1px 2px rgba(20,20,20,.05),0 4px 12px rgba(20,20,20,.04);
+  --bg:#fdfdfc; --bg-2:#f5f5f3; --bg-3:#ebebe7;
+  --text:#1b1c1f; --text-2:#5b5e65; --text-3:#8a8e95;
+  --border:#e3e3df; --border-strong:#cecec8;
+  --accent:#2f6feb; --accent-soft:#eaf1fe;
+  --code-bg:#f8f8f6;
+  --danger:#c4342b; --danger-bg:#fdf1f0;
+  --tip:#177f50; --tip-bg:#eff8f3;
+  --info:#2f6feb;   --info-bg:#eff4fe;
+  --shadow:0 1px 2px rgba(20,20,20,.05),0 4px 12px rgba(20,20,20,.04);
   --mono:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Code",Menlo,Consolas,monospace;
   --sans:system-ui,-apple-system,"Segoe UI",Inter,Roboto,"Helvetica Neue",sans-serif;
-  --menu:290px; --toc:15.5rem; --texte-large:52rem;
+  --menu:290px; --toc:15.5rem; --text-wide:52rem;
 }
-/* SOMBRE PAR DÉFAUT : la palette claire ci-dessus n'est que la base, le sombre
-   s'applique sauf si le lecteur a explicitement choisi le clair via la bascule.
-   On n'écoute donc PAS prefers-color-scheme — c'est un choix assumé. */
-:root:not([data-theme="light"]){__SOMBRE__}
+/* DARK BY DEFAULT: the light palette above is only the base, the dark
+   s'applique sauf si le lecteur a explicitement choisi le light via la bascule.
+   So we do NOT listen to prefers-color-scheme — that is a deliberate choice. */
+:root:not([data-theme="light"]){__DARK__}
 html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
-body{margin:0;background:var(--fond);color:var(--texte);font:16px/1.7 var(--sans);
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.7 var(--sans);
   -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
 a{color:var(--accent);text-decoration:none}
 a:hover{text-decoration:underline;text-underline-offset:3px}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
 
 /* ---------- structure ----------
-   Le sommaire est une VRAIE colonne de grille (et non un élément `fixed` compensé
-   par une marge) : sinon, réserver sa place avec `margin-right` écrase le
-   `margin:0 auto` du contenu et le `margin-left:auto` restant décale tout le texte
-   vers la droite sur les grands écrans. */
-.enveloppe{display:grid;grid-template-columns:var(--menu) minmax(0,1fr);
+   The TOC is a REAL grid column (not a `fixed` element compensated by a margin):
+   otherwise, reserving its space with `margin-right` overrides the content's
+   `margin:0 auto`, and the remaining `margin-left:auto` shifts all the text to the
+   right on large screens. */
+.wrapper{display:grid;grid-template-columns:var(--menu) minmax(0,1fr);
   min-height:100vh;align-items:start}
-.menu{position:sticky;top:0;height:100vh;overflow-y:auto;background:var(--fond-2);
-  border-right:1px solid var(--bord);padding:1.4rem 0 3rem;scrollbar-width:thin}
-/* `width:100%` est INDISPENSABLE avec `margin-inline:auto` : des marges auto sur un
-   élément de grille désactivent l'étirement sur la piste, l'élément est alors
-   dimensionné en fit-content — donc plafonné à sa `max-width` (941px) quelle que
-   soit la largeur réelle de la piste. Sous 941px de viewport il débordait à droite,
-   avec un scroll horizontal global. Avec `width:100%` il suit la piste, et les
-   marges auto ne recentrent que lorsqu'il reste de la place. */
-.contenu{min-width:0;width:100%;padding:2.4rem clamp(1.2rem,4vw,3.4rem) 6rem;
-  max-width:calc(var(--texte-large) + 6.8rem);margin-inline:auto}
+.menu{position:sticky;top:0;height:100vh;overflow-y:auto;background:var(--bg-2);
+  border-right:1px solid var(--border);padding:1.4rem 0 3rem;scrollbar-width:thin}
+/* `width:100%` is INDISPENSABLE together with `margin-inline:auto`: auto margins on a
+   grid item disable stretching on the track, the item is then sized as fit-content —
+   hence capped at its `max-width` (941px) whatever the track's real width. Below a
+   941px viewport it overflowed to the right,
+   with a global horizontal scroll. With `width:100%` it follows the track, and the
+   auto margins only re-centre when there is room left. */
+.content{min-width:0;width:100%;padding:2.4rem clamp(1.2rem,4vw,3.4rem) 6rem;
+  max-width:calc(var(--text-wide) + 6.8rem);margin-inline:auto}
 
 /* ---------- menu ---------- */
 /* Marque en COLONNE : le badge dépôt sur sa propre ligne. Posé en bout de la
-   ligne de titre, il la rétrécissait assez pour couper « Vagrant-KubeADM » et
+   title line, it shrank it enough to break "Vagrant-KubeADM" and
    l'horodatage en deux (menu à 290px). */
-.marque{display:flex;flex-direction:column;align-items:flex-start;gap:.6rem;
+.brand{display:flex;flex-direction:column;align-items:flex-start;gap:.6rem;
   padding:0 1.3rem 1.1rem;font-weight:650;letter-spacing:-.01em}
-.marque-titre{display:flex;align-items:center;gap:.65rem}
-.marque .logo{font-size:1.5rem;line-height:1}
-.marque small{display:block;font-weight:450;color:var(--texte-3);font-size:.74rem;
+.brand-title{display:flex;align-items:center;gap:.65rem}
+.brand .logo{font-size:1.5rem;line-height:1}
+.brand small{display:block;font-weight:450;color:var(--text-3);font-size:.74rem;
   letter-spacing:0;font-family:var(--mono)}
-/* Badge dépôt, en haut du menu de gauche sous le titre.
-   `currentColor` sur le SVG => il suit le thème clair/sombre. */
-.marque .depot{display:inline-flex;align-items:center;gap:.3rem;align-self:center;
-  padding:.2rem .45rem;border:1px solid var(--bord-fort);border-radius:6px;
-  color:var(--texte-2);font-size:.72rem;font-weight:600;letter-spacing:0}
-.marque .depot:hover{color:var(--texte);background:var(--fond-3);
-  border-color:var(--texte-3);text-decoration:none}
-.marque .depot svg{flex:0 0 14px;width:14px;height:14px;fill:currentColor}
-.recherche{padding:0 1.1rem 1rem}
-.recherche input{width:100%;padding:.5rem .7rem;border:1px solid var(--bord-fort);
-  border-radius:8px;background:var(--fond);color:var(--texte);font:inherit;font-size:.87rem}
-.groupe > h2{margin:0;padding:.85rem 1.35rem .35rem;font-size:.69rem;font-weight:650;
-  text-transform:uppercase;letter-spacing:.09em;color:var(--texte-3)}
+/* Repo badge, at the top of the left menu under the title.
+   `currentColor` on the SVG => it follows the light/dark theme. */
+.brand .repo{display:inline-flex;align-items:center;gap:.3rem;align-self:center;
+  padding:.2rem .45rem;border:1px solid var(--border-strong);border-radius:6px;
+  color:var(--text-2);font-size:.72rem;font-weight:600;letter-spacing:0}
+.brand .repo:hover{color:var(--text);background:var(--bg-3);
+  border-color:var(--text-3);text-decoration:none}
+.brand .repo svg{flex:0 0 14px;width:14px;height:14px;fill:currentColor}
+.search{padding:0 1.1rem 1rem}
+.search input{width:100%;padding:.5rem .7rem;border:1px solid var(--border-strong);
+  border-radius:8px;background:var(--bg);color:var(--text);font:inherit;font-size:.87rem}
+.group > h2{margin:0;padding:.85rem 1.35rem .35rem;font-size:.69rem;font-weight:650;
+  text-transform:uppercase;letter-spacing:.09em;color:var(--text-3)}
 .menu a{display:flex;gap:.55rem;align-items:baseline;padding:.34rem 1.35rem;
-  color:var(--texte-2);font-size:.89rem;border-left:2px solid transparent}
-.menu a:hover{color:var(--texte);background:var(--fond-3);text-decoration:none}
-.menu a.actif{color:var(--accent);background:var(--accent-doux);
+  color:var(--text-2);font-size:.89rem;border-left:2px solid transparent}
+.menu a:hover{color:var(--text);background:var(--bg-3);text-decoration:none}
+.menu a.actif{color:var(--accent);background:var(--accent-soft);
   border-left-color:var(--accent);font-weight:550}
 .menu a .emo{flex:0 0 1.15rem;font-size:.95rem}
 .menu a .txt{min-width:0}
-.menu a .chemin{display:block;font-size:.7rem;color:var(--texte-3);
+.menu a .path{display:block;font-size:.7rem;color:var(--text-3);
   font-family:var(--mono);word-break:break-all;line-height:1.35}
 .badge{display:inline-block;margin-left:.35rem;padding:0 .34rem;border-radius:4px;
-  background:var(--danger-fond);color:var(--danger);font-size:.63rem;font-weight:650;
+  background:var(--danger-bg);color:var(--danger);font-size:.63rem;font-weight:650;
   text-transform:uppercase;letter-spacing:.04em;vertical-align:middle}
-.badge-langue{background:var(--info-fond);color:var(--info)}
+.badge-lang{background:var(--info-bg);color:var(--info)}
 
-/* ---------- sélecteur de langue ---------- */
-.langues{display:flex;gap:.3rem;padding:0 1.1rem 1rem}
-.langues button{flex:1;padding:.32rem 0;border:1px solid var(--bord-fort);border-radius:7px;
-  background:var(--fond);color:var(--texte-2);font:650 .74rem/1.45 var(--sans);
+/* ---------- language selector ---------- */
+.languages{display:flex;gap:.3rem;padding:0 1.1rem 1rem}
+.languages button{flex:1;padding:.32rem 0;border:1px solid var(--border-strong);border-radius:7px;
+  background:var(--bg);color:var(--text-2);font:650 .74rem/1.45 var(--sans);
   letter-spacing:.05em;cursor:pointer;transition:color .12s,border-color .12s}
-.langues button:hover{color:var(--accent);border-color:var(--accent)}
-/* Sélecteur de thème : même gabarit que .langues, juste en dessous. */
+.languages button:hover{color:var(--accent);border-color:var(--accent)}
+/* Theme selector: same template as .languages, right below it. */
 .themes{display:flex;gap:.3rem;padding:0 1.1rem .9rem}
-.themes button{flex:1;padding:.32rem 0;border:1px solid var(--bord-fort);border-radius:7px;
-  background:var(--fond);color:var(--texte-2);font-size:.78rem;cursor:pointer}
+.themes button{flex:1;padding:.32rem 0;border:1px solid var(--border-strong);border-radius:7px;
+  background:var(--bg);color:var(--text-2);font-size:.78rem;cursor:pointer}
 .themes button:hover{color:var(--accent);border-color:var(--accent)}
-.themes button[aria-pressed="true"]{background:var(--accent-doux);color:var(--accent);
+.themes button[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent);
   border-color:var(--accent)}
-.langues button[aria-pressed="true"]{background:var(--accent-doux);color:var(--accent);
+.languages button[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent);
   border-color:var(--accent)}
 
-/* ---------- en-tête de page ---------- */
-.fil{display:flex;align-items:center;gap:.45rem;flex-wrap:wrap;margin-bottom:.55rem;
-  font:.77rem/1.5 var(--mono);color:var(--texte-3)}
+/* ---------- page header ---------- */
+.crumb{display:flex;align-items:center;gap:.45rem;flex-wrap:wrap;margin-bottom:.55rem;
+  font:.77rem/1.5 var(--mono);color:var(--text-3)}
 .page > h1{margin:.1rem 0 .35rem;font-size:clamp(1.7rem,3.4vw,2.3rem);line-height:1.18;
   letter-spacing:-.022em;font-weight:680}
 .page > h1 .emo{margin-right:.45rem}
-/* `code` dans un titre : gardé en monospace mais sans le cadre du code inline,
-   qui alourdirait un titre de 2rem. */
-.page > h1 code{font-size:.86em;font-weight:640;background:var(--fond-3);
-  border:1px solid var(--bord);border-radius:7px;padding:.06em .3em}
+/* `code` inside a heading: kept monospace but without the inline-code frame,
+   which would weigh down a 2rem heading. */
+.page > h1 code{font-size:.86em;font-weight:640;background:var(--bg-3);
+  border:1px solid var(--border);border-radius:7px;padding:.06em .3em}
 .page h2 code,.page h3 code,.page h4 code{font-size:.9em;font-weight:inherit}
-.sous-titre{margin:0 0 2.2rem;color:var(--texte-2);font-size:1.02rem;max-width:44rem}
-.sous-titre > p{margin:0 0 .4rem}
+.subtitle{margin:0 0 2.2rem;color:var(--text-2);font-size:1.02rem;max-width:44rem}
+.subtitle > p{margin:0 0 .4rem}
 
-/* ---------- contenu ---------- */
+/* ---------- content ---------- */
 .page h2,.page h3,.page h4{letter-spacing:-.015em;line-height:1.3;scroll-margin-top:1.5rem}
 .page h2{margin:2.9rem 0 .9rem;padding-bottom:.42rem;font-size:1.4rem;font-weight:660;
-  border-bottom:1px solid var(--bord)}
+  border-bottom:1px solid var(--border)}
 .page h3{margin:2.1rem 0 .7rem;font-size:1.12rem;font-weight:640}
-.page h4{margin:1.6rem 0 .5rem;font-size:1rem;font-weight:640;color:var(--texte-2)}
+.page h4{margin:1.6rem 0 .5rem;font-size:1rem;font-weight:640;color:var(--text-2)}
 .page p{margin:0 0 1.05rem}
 .page ul,.page ol{margin:0 0 1.1rem;padding-left:1.4rem}
 .page li{margin:.28rem 0}
 .page li > p{margin:.3rem 0}
-.page li::marker{color:var(--texte-3)}
-.page hr{margin:2.6rem 0;border:0;border-top:1px solid var(--bord)}
-.page strong{font-weight:640;color:var(--texte)}
+.page li::marker{color:var(--text-3)}
+.page hr{margin:2.6rem 0;border:0;border-top:1px solid var(--border)}
+.page strong{font-weight:640;color:var(--text)}
 .page img{max-width:100%;height:auto}
-.header-anchor{margin-left:.4rem;color:var(--texte-3);opacity:0;font-weight:400;
+.header-anchor{margin-left:.4rem;color:var(--text-3);opacity:0;font-weight:400;
   text-decoration:none;transition:opacity .12s}
 h2:hover>.header-anchor,h3:hover>.header-anchor,h4:hover>.header-anchor{opacity:1}
 
 /* ---------- code ---------- */
 code{font-family:var(--mono);font-size:.875em}
-:not(pre) > code{background:var(--fond-3);color:var(--texte);padding:.12em .38em;
-  border-radius:5px;border:1px solid var(--bord)}
-.bloc-code{position:relative;margin:0 0 1.25rem;background:var(--code-fond);
-  border:1px solid var(--bord);border-radius:10px;box-shadow:var(--ombre);overflow:hidden}
-.bloc-code::before{content:attr(data-langage);position:absolute;top:0;right:0;
+:not(pre) > code{background:var(--bg-3);color:var(--text);padding:.12em .38em;
+  border-radius:5px;border:1px solid var(--border)}
+.code-block{position:relative;margin:0 0 1.25rem;background:var(--code-bg);
+  border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow);overflow:hidden}
+.code-block::before{content:attr(data-language);position:absolute;top:0;right:0;
   padding:.18rem .6rem;font:600 .65rem/1.5 var(--mono);letter-spacing:.06em;
-  text-transform:uppercase;color:var(--texte-3);background:var(--fond-3);
-  border-left:1px solid var(--bord);border-bottom:1px solid var(--bord);
+  text-transform:uppercase;color:var(--text-3);background:var(--bg-3);
+  border-left:1px solid var(--border);border-bottom:1px solid var(--border);
   border-bottom-left-radius:8px}
-.bloc-code pre{margin:0;padding:1.55rem 1.05rem 1.05rem;overflow-x:auto;
+.code-block pre{margin:0;padding:1.55rem 1.05rem 1.05rem;overflow-x:auto;
   font-family:var(--mono);font-size:.845rem;line-height:1.62;tab-size:2}
-.bloc-code code{white-space:pre}
-.copier{position:absolute;top:2.35rem;right:.55rem;z-index:2;padding:.26rem .55rem;
-  border:1px solid var(--bord-fort);border-radius:6px;background:var(--fond);
-  color:var(--texte-2);font:550 .72rem/1 var(--sans);cursor:pointer;opacity:0;
+.code-block code{white-space:pre}
+.copy-btn{position:absolute;top:2.35rem;right:.55rem;z-index:2;padding:.26rem .55rem;
+  border:1px solid var(--border-strong);border-radius:6px;background:var(--bg);
+  color:var(--text-2);font:550 .72rem/1 var(--sans);cursor:pointer;opacity:0;
   transition:opacity .13s,color .13s}
-.bloc-code:hover .copier,.copier:focus-visible{opacity:1}
-.copier:hover{color:var(--accent);border-color:var(--accent)}
-.copier.ok{color:var(--astuce);border-color:var(--astuce)}
+.code-block:hover .copy-btn,.copy-btn:focus-visible{opacity:1}
+.copy-btn:hover{color:var(--accent);border-color:var(--accent)}
+.copy-btn.ok{color:var(--tip);border-color:var(--tip)}
 
 /* ---------- encarts (citations) ---------- */
-.encart{margin:0 0 1.25rem;padding:.85rem 1.1rem;border-left:3px solid var(--bord-fort);
-  border-radius:0 8px 8px 0;background:var(--fond-2);color:var(--texte-2)}
-.encart > :last-child{margin-bottom:0}
-.encart .bloc-code{margin:.75rem 0 .35rem;box-shadow:none}
-.encart-danger{border-left-color:var(--danger);background:var(--danger-fond)}
-.encart-astuce{border-left-color:var(--astuce);background:var(--astuce-fond)}
-.encart-info{border-left-color:var(--info);background:var(--info-fond)}
+.callout{margin:0 0 1.25rem;padding:.85rem 1.1rem;border-left:3px solid var(--border-strong);
+  border-radius:0 8px 8px 0;background:var(--bg-2);color:var(--text-2)}
+.callout > :last-child{margin-bottom:0}
+.callout .code-block{margin:.75rem 0 .35rem;box-shadow:none}
+.callout-danger{border-left-color:var(--danger);background:var(--danger-bg)}
+.callout-tip{border-left-color:var(--tip);background:var(--tip-bg)}
+.callout-info{border-left-color:var(--info);background:var(--info-bg)}
 
 /* ---------- tableaux ---------- */
-.table-scroll{overflow-x:auto;margin:0 0 1.3rem;border:1px solid var(--bord);
-  border-radius:10px;box-shadow:var(--ombre)}
+.table-scroll{overflow-x:auto;margin:0 0 1.3rem;border:1px solid var(--border);
+  border-radius:10px;box-shadow:var(--shadow)}
 table{width:100%;border-collapse:collapse;font-size:.895rem}
 th,td{padding:.58rem .85rem;text-align:left;vertical-align:top;
-  border-bottom:1px solid var(--bord)}
-th{background:var(--fond-2);font-weight:640;font-size:.78rem;text-transform:uppercase;
-  letter-spacing:.05em;color:var(--texte-2);white-space:nowrap}
+  border-bottom:1px solid var(--border)}
+th{background:var(--bg-2);font-weight:640;font-size:.78rem;text-transform:uppercase;
+  letter-spacing:.05em;color:var(--text-2);white-space:nowrap}
 tbody tr:last-child td{border-bottom:0}
-tbody tr:hover{background:var(--fond-2)}
+tbody tr:hover{background:var(--bg-2)}
 
 /* ---------- details ---------- */
-details{margin:0 0 1.3rem;border:1px solid var(--bord);border-radius:10px;
-  background:var(--fond-2);overflow:hidden}
+details{margin:0 0 1.3rem;border:1px solid var(--border);border-radius:10px;
+  background:var(--bg-2);overflow:hidden}
 details > summary{padding:.75rem 1.05rem;font-weight:600;cursor:pointer;list-style:none;
   display:flex;align-items:center;gap:.5rem}
 details > summary::-webkit-details-marker{display:none}
 details > summary::before{content:"›";display:inline-block;font-size:1.15rem;
-  color:var(--texte-3);transition:transform .15s}
+  color:var(--text-3);transition:transform .15s}
 details[open] > summary::before{transform:rotate(90deg)}
-details > summary:hover{background:var(--fond-3)}
+details > summary:hover{background:var(--bg-3)}
 details > :not(summary){margin-left:1.05rem;margin-right:1.05rem}
 details > :not(summary):last-child{margin-bottom:1.05rem}
 
-/* ---------- sommaire de droite ---------- */
-.sommaire{display:none;position:sticky;top:2.4rem;max-height:calc(100vh - 5rem);
+/* ---------- toc de droite ---------- */
+.toc{display:none;position:sticky;top:2.4rem;max-height:calc(100vh - 5rem);
   overflow-y:auto;padding:0 1.4rem 2rem 0;font-size:.82rem}
-.sommaire h2{margin:0 0 .5rem;font-size:.69rem;font-weight:650;text-transform:uppercase;
-  letter-spacing:.09em;color:var(--texte-3)}
-.sommaire a{display:block;padding:.18rem 0 .18rem .7rem;color:var(--texte-2);
-  border-left:2px solid var(--bord);line-height:1.45}
-.sommaire a:hover{color:var(--texte);text-decoration:none}
-.sommaire a.actif{color:var(--accent);border-left-color:var(--accent);font-weight:550}
-.sommaire a.n3{padding-left:1.5rem;font-size:.78rem}
+.toc h2{margin:0 0 .5rem;font-size:.69rem;font-weight:650;text-transform:uppercase;
+  letter-spacing:.09em;color:var(--text-3)}
+.toc a{display:block;padding:.18rem 0 .18rem .7rem;color:var(--text-2);
+  border-left:2px solid var(--border);line-height:1.45}
+.toc a:hover{color:var(--text);text-decoration:none}
+.toc a.actif{color:var(--accent);border-left-color:var(--accent);font-weight:550}
+.toc a.n3{padding-left:1.5rem;font-size:.78rem}
 @media (min-width:1500px){
-  .enveloppe{grid-template-columns:var(--menu) minmax(0,1fr) var(--toc)}
-  .sommaire{display:block}
+  .wrapper{grid-template-columns:var(--menu) minmax(0,1fr) var(--toc)}
+  .toc{display:block}
 }
 
-/* ---------- barre mobile ---------- */
-.barre{display:none;position:sticky;top:0;z-index:20;align-items:center;gap:.7rem;
-  padding:.6rem .9rem;background:var(--fond);border-bottom:1px solid var(--bord)}
-.barre .langues{padding:0;margin-left:auto;gap:.25rem}
-.barre .langues button{padding:.3rem .45rem;min-width:2.3rem}
-.bouton-icone{display:grid;place-items:center;width:2.1rem;height:2.1rem;flex:0 0 auto;
-  border:1px solid var(--bord-fort);border-radius:8px;background:var(--fond);
-  color:var(--texte-2);font-size:1rem;cursor:pointer}
-.bouton-icone:hover{color:var(--accent);border-color:var(--accent)}
-.theme-flottant{position:fixed;bottom:1.1rem;right:1.1rem;z-index:30;box-shadow:var(--ombre)}
-.voile{position:fixed;inset:0;z-index:35;background:rgba(0,0,0,.45);display:none}
+/* ---------- topbar mobile ---------- */
+.topbar{display:none;position:sticky;top:0;z-index:20;align-items:center;gap:.7rem;
+  padding:.6rem .9rem;background:var(--bg);border-bottom:1px solid var(--border)}
+.topbar .languages{padding:0;margin-left:auto;gap:.25rem}
+.topbar .languages button{padding:.3rem .45rem;min-width:2.3rem}
+.icon-button{display:grid;place-items:center;width:2.1rem;height:2.1rem;flex:0 0 auto;
+  border:1px solid var(--border-strong);border-radius:8px;background:var(--bg);
+  color:var(--text-2);font-size:1rem;cursor:pointer}
+.icon-button:hover{color:var(--accent);border-color:var(--accent)}
+.theme-floating{position:fixed;bottom:1.1rem;right:1.1rem;z-index:30;box-shadow:var(--shadow)}
+.overlay{position:fixed;inset:0;z-index:35;background:rgba(0,0,0,.45);display:none}
 @media (max-width:1000px){
-  /* minmax(0,1fr) et NON 1fr : une piste `1fr` garde un min-width:auto implicite,
-     donc elle refuse de descendre sous la largeur intrinsèque de son contenu. Les
-     blocs de code et les tableaux larges élargissaient alors la colonne au-delà du
-     viewport => tout le texte débordait à droite, avec un scroll horizontal global.
-     Le desktop utilisait déjà minmax(0,1fr) ; seul le mobile avait été oublié. */
-  .enveloppe{grid-template-columns:minmax(0,1fr)}
-  .barre{display:flex}
+  /* minmax(0,1fr) and NOT 1fr: a `1fr` track keeps an implicit min-width:auto,
+     so it refuses to go below the intrinsic width of its content. Code blocks and
+     wide tables then widened the column beyond the viewport => all the text overflowed
+     to the right, with a global horizontal scroll. Desktop already used minmax(0,1fr);
+     only mobile had been forgotten. */
+  .wrapper{grid-template-columns:minmax(0,1fr)}
+  .topbar{display:flex}
   .menu{position:fixed;inset:0 auto 0 0;width:min(86vw,var(--menu));z-index:40;
-    transform:translateX(-100%);transition:transform .2s ease;box-shadow:var(--ombre)}
+    transform:translateX(-100%);transition:transform .2s ease;box-shadow:var(--shadow)}
   .menu.ouvert{transform:none}
-  .voile.ouvert{display:block}
-  .contenu{padding:1.6rem 1.15rem 5rem}
-  .theme-flottant{display:none}
+  .overlay.ouvert{display:block}
+  .content{padding:1.6rem 1.15rem 5rem}
+  .theme-floating{display:none}
 }
 @media print{
-  .menu,.sommaire,.barre,.copier,.theme-flottant,.header-anchor,.voile,
-  .langues,.themes{display:none!important}
-  .enveloppe{grid-template-columns:minmax(0,1fr)}
+  .menu,.toc,.topbar,.copy-btn,.theme-floating,.header-anchor,.overlay,
+  .languages,.themes{display:none!important}
+  .wrapper{grid-template-columns:minmax(0,1fr)}
   .page{display:block!important;page-break-after:always}
-  .bloc-code,.table-scroll{box-shadow:none}
+  .code-block,.table-scroll{box-shadow:none}
 }
 .page{display:none}
 .page.visible{display:block}
-.pied{margin-top:4rem;padding-top:1.3rem;border-top:1px solid var(--bord);
-  color:var(--texte-3);font-size:.79rem;display:flex;justify-content:space-between;
+.footer{margin-top:4rem;padding-top:1.3rem;border-top:1px solid var(--border);
+  color:var(--text-3);font-size:.79rem;display:flex;justify-content:space-between;
   gap:1rem;flex-wrap:wrap}
-""".replace("__SOMBRE__", PALETTE_SOMBRE)
+""".replace("__DARK__", DARK_PALETTE)
 
 
 JS = r"""
 (() => {
-  const LANGUES = __LANGUES__;
-  const LIBELLES = __LIBELLES__;
-  const DEFAUT = __DEFAUT__;
+  const LANGUAGES = __LANGUAGES__;
+  const LABELS = __LABELS__;
+  const DEFAULT_LANG = __DEFAULT_LANG__;
 
   const pages = [...document.querySelectorAll('.page')];
-  const liens = [...document.querySelectorAll('.menu a[data-page]')];
+  const links = [...document.querySelectorAll('.menu a[data-page]')];
   const menu  = document.querySelector('.menu');
-  const voile = document.querySelector('.voile');
-  const boite = document.querySelector('.sommaire');
-  const champ = document.querySelector('.recherche input');
-  let observateur = null;
+  const overlay = document.querySelector('.overlay');
+  const box = document.querySelector('.toc');
+  const field = document.querySelector('.search input');
+  let observer = null;
 
-  /* --- langue : mémorisée, mais toujours déduite de la page affichée --- */
-  const CLE_LANGUE = 'kubeadm-doc-langue';
-  const memoLangue = localStorage.getItem(CLE_LANGUE);
-  let langue = LANGUES.includes(memoLangue) ? memoLangue : DEFAUT;
-  const mots = () => LIBELLES[langue];
+  /* --- language: remembered, but always derived from the displayed page --- */
+  const LANG_KEY = 'kubeadm-doc-lang';
+  const storedLang = localStorage.getItem(LANG_KEY);
+  let lang = LANGUAGES.includes(storedLang) ? storedLang : DEFAULT_LANG;
+  const words = () => LABELS[lang];
 
-  const majLangue = (suivante) => {
-    langue = suivante;
-    localStorage.setItem(CLE_LANGUE, langue);
-    document.documentElement.lang = langue;
-    const m = mots();
-    document.querySelectorAll('.arbre').forEach(a => { a.hidden = a.dataset.langue !== langue; });
-    document.querySelectorAll('.langues button').forEach(b => {
-      b.setAttribute('aria-pressed', String(b.dataset.langue === langue));
+  const updateLang = (nextEntry) => {
+    lang = nextEntry;
+    localStorage.setItem(LANG_KEY, lang);
+    document.documentElement.lang = lang;
+    const m = words();
+    document.querySelectorAll('.tree').forEach(a => { a.hidden = a.dataset.lang !== lang; });
+    document.querySelectorAll('.languages button').forEach(b => {
+      b.setAttribute('aria-pressed', String(b.dataset.lang === lang));
     });
-    champ.placeholder = m.recherche;
-    champ.setAttribute('aria-label', m.recherche_aria);
+    field.placeholder = m.search;
+    field.setAttribute('aria-label', m.search_aria);
     document.querySelectorAll('[data-menu-toggle]').forEach(b => b.setAttribute('aria-label', m.menu));
-    document.querySelectorAll('.langues').forEach(g => g.setAttribute('aria-label', m.langue_aria));
-    document.querySelectorAll('[data-depot]').forEach(a => {
-      a.setAttribute('aria-label', m.depot); a.setAttribute('title', m.depot);
+    document.querySelectorAll('.languages').forEach(g => g.setAttribute('aria-label', m.lang_aria));
+    document.querySelectorAll('[data-repo]').forEach(a => {
+      a.setAttribute('aria-label', m.repo); a.setAttribute('title', m.repo);
     });
-    document.querySelectorAll('[data-plateforme]').forEach(a => {
-      a.setAttribute('aria-label', m.plateforme); a.setAttribute('title', m.plateforme);
-      const s = a.querySelector('span'); if (s) s.textContent = m.plateforme_court;
+    document.querySelectorAll('[data-platform]').forEach(a => {
+      a.setAttribute('aria-label', m.platform); a.setAttribute('title', m.platform);
+      const s = a.querySelector('span'); if (s) s.textContent = m.platform_short;
     });
-    document.querySelectorAll('.copier').forEach(b => { b.textContent = m.copier; });
-    majTheme();
-    if (boite.firstElementChild) boite.firstElementChild.textContent = m.sommaire;
+    document.querySelectorAll('.copy-btn').forEach(b => { b.textContent = m.copy; });
+    updateTheme();
+    if (box.firstElementChild) box.firstElementChild.textContent = m.toc;
   };
 
-  /* --- sommaire de la page affichée + surlignage à la lecture --- */
-  const construireSommaire = (page) => {
-    const titres = [...page.querySelectorAll('h2[id],h3[id]')];
-    observateur?.disconnect();
-    if (titres.length < 3) { boite.innerHTML = ''; return; }
-    boite.innerHTML = `<h2>${mots().sommaire}</h2>` + titres.map(h => {
-      const libelle = h.textContent.replace(/#$/, '').trim();
-      return `<a href="#${page.id}/${h.id}" data-pour="${h.id}"
-                 class="${h.tagName === 'H3' ? 'n3' : ''}">${libelle}</a>`;
+  /* --- TOC of the displayed page + highlight while reading --- */
+  const buildToc = (page) => {
+    const headings = [...page.querySelectorAll('h2[id],h3[id]')];
+    observer?.disconnect();
+    if (headings.length < 3) { box.innerHTML = ''; return; }
+    box.innerHTML = `<h2>${words().toc}</h2>` + headings.map(h => {
+      const label_text = h.textContent.replace(/#$/, '').trim();
+      return `<a href="#${page.id}/${h.id}" data-lang-for="${h.id}"
+                 class="${h.tagName === 'H3' ? 'n3' : ''}">${label_text}</a>`;
     }).join('');
-    const ancres = new Map([...boite.querySelectorAll('a')].map(a => [a.dataset.pour, a]));
-    observateur = new IntersectionObserver(entrees => {
-      for (const e of entrees) {
+    const anchors = new Map([...boite.querySelectorAll('a')].map(a => [a.dataset.langFor, a]));
+    observer = new IntersectionObserver(entries => {
+      for (const e of entries) {
         if (!e.isIntersecting) continue;
-        ancres.forEach(a => a.classList.remove('actif'));
-        ancres.get(e.target.id)?.classList.add('actif');
+        anchors.forEach(a => a.classList.remove('active'));
+        anchors.get(e.target.id)?.classList.add('active');
       }
     }, { rootMargin: '-8% 0px -80% 0px' });
-    titres.forEach(h => observateur.observe(h));
+    headings.forEach(h => observer.observe(h));
   };
 
-  /* --- routage : #<langue>/<page>/<section> ---
-     L'ancien format (#<page>/<section>, sans langue) reste accepté : les liens
-     déjà partagés continuent d'ouvrir la bonne page, dans la langue courante. */
-  const afficher = (id, section) => {
-    const cible = pages.find(p => p.id === id)
-               ?? pages.find(p => p.dataset.langue === langue)
+  /* --- routage : #<lang>/<page>/<section> ---
+     The old format (#<page>/<section>, without a language) is still accepted: links
+     already shared keep opening the right page, in the current language. */
+  const show = (id, section) => {
+    const target = pages.find(p => p.id === id)
+               ?? pages.find(p => p.dataset.lang === lang)
                ?? pages[0];
-    if (cible.dataset.langue !== langue) majLangue(cible.dataset.langue);
-    pages.forEach(p => p.classList.toggle('visible', p === cible));
-    liens.forEach(a => {
-      const actif = a.dataset.page === cible.id;
-      a.classList.toggle('actif', actif);
-      actif ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current');
+    if (target.dataset.lang !== lang) updateLang(target.dataset.lang);
+    pages.forEach(p => p.classList.toggle('visible', p === target));
+    links.forEach(a => {
+      const active = a.dataset.page === target.id;
+      a.classList.toggle('active', active);
+      active ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current');
     });
-    construireSommaire(cible);
-    document.title = cible.dataset.titre + ' · Vagrant-KubeADM';
-    const h = section && cible.querySelector('[id="' + CSS.escape(section) + '"]');
+    buildToc(target);
+    document.title = target.dataset.title + ' · Vagrant-KubeADM';
+    const h = section && target.querySelector('[id="' + CSS.escape(section) + '"]');
     h ? h.scrollIntoView() : window.scrollTo(0, 0);
   };
   const route = () => {
     const parts = decodeURIComponent(location.hash.slice(1)).split('/').filter(Boolean);
-    return LANGUES.includes(parts[0])
+    return LANGUAGES.includes(parts[0])
       ? { id: parts.slice(0, 2).join('/'), section: parts[2] }
-      : { id: parts.length ? langue + '/' + parts[0] : '', section: parts[1] };
+      : { id: parts.length ? lang + '/' + parts[0] : '', section: parts[1] };
   };
-  const router = () => { const r = route(); afficher(r.id, r.section); };
+  const router = () => { const r = route(); show(r.id, r.section); };
 
-  /* --- bascule de langue : même page, autre version --- */
-  document.querySelectorAll('.langues button').forEach(b => b.addEventListener('click', () => {
-    const suivante = b.dataset.langue;
-    if (suivante === langue) return;
-    const courante = pages.find(p => p.classList.contains('visible'));
+  /* --- language switch: same page, other version --- */
+  document.querySelectorAll('.languages button').forEach(b => b.addEventListener('click', () => {
+    const nextEntry = b.dataset.lang;
+    if (nextEntry === lang) return;
+    const current = pages.find(p => p.classList.contains('visible'));
     const section = route().section;
-    majLangue(suivante);
-    location.hash = '#' + suivante + '/' + (courante?.dataset.doc ?? '')
+    updateLang(nextEntry);
+    location.hash = '#' + nextEntry + '/' + (current?.dataset.doc ?? '')
                   + (section ? '/' + section : '');
-    router();   /* si le hash n'a pas changé (page absente), on rend quand même */
+    router();   /* when the hash did not change (missing page), render anyway */
   }));
 
-  /* --- recherche (titre, chemin, sections) ; « / » pour cibler le champ --- */
-  champ.addEventListener('input', () => {
-    const q = champ.value.trim().toLowerCase();
-    liens.forEach(a => { a.hidden = !!q && !a.dataset.recherche.includes(q); });
-    document.querySelectorAll('.groupe').forEach(g => {
+  /* --- search (title, path, sections); "/" focuses the field --- */
+  field.addEventListener('input', () => {
+    const q = field.value.trim().toLowerCase();
+    links.forEach(a => { a.hidden = !!q && !a.dataset.search.includes(q); });
+    document.querySelectorAll('.group').forEach(g => {
       g.hidden = ![...g.querySelectorAll('a')].some(a => !a.hidden);
     });
   });
   document.addEventListener('keydown', e => {
-    if (e.key === '/' && document.activeElement !== champ) { e.preventDefault(); champ.focus(); }
-    else if (e.key === 'Escape' && document.activeElement === champ) {
-      champ.value = ''; champ.dispatchEvent(new Event('input')); champ.blur();
+    if (e.key === '/' && document.activeElement !== field) { e.preventDefault(); field.focus(); }
+    else if (e.key === 'Escape' && document.activeElement === field) {
+      field.value = ''; field.dispatchEvent(new Event('input')); field.blur();
     }
   });
 
-  /* --- copier un bloc de code --- */
+  /* --- copy a code block --- */
   document.addEventListener('click', async e => {
-    const b = e.target.closest('.copier');
+    const b = e.target.closest('.copy-btn');
     if (!b) return;
-    const m = mots();
+    const m = words();
     try {
       await navigator.clipboard.writeText(b.parentElement.querySelector('code').innerText);
-      b.textContent = m.copie; b.classList.add('ok');
-    } catch { b.textContent = m.echec; }
-    setTimeout(() => { b.textContent = mots().copier; b.classList.remove('ok'); }, 1600);
+      b.textContent = m.copied; b.classList.add('ok');
+    } catch { b.textContent = m.failed; }
+    setTimeout(() => { b.textContent = words().copy; b.classList.remove('ok'); }, 1600);
   });
 
-  /* --- thème : SOMBRE par défaut, bascule mémorisée --- */
-  const CLE = 'kubeadm-doc-theme';
-  const memo = localStorage.getItem(CLE);
-  if (memo) document.documentElement.dataset.theme = memo;
-  function majTheme() {
-    const sombre = (document.documentElement.dataset.theme || 'dark') === 'dark';
-    const m = mots();
+  /* --- theme: DARK by default, remembered toggle --- */
+  const KEY = 'kubeadm-doc-theme';
+  const stored = localStorage.getItem(KEY);
+  if (stored) document.documentElement.dataset.theme = stored;
+  function updateTheme() {
+    const dark = (document.documentElement.dataset.theme || 'dark') === 'dark';
+    const m = words();
     document.querySelectorAll('[data-theme-toggle]').forEach(b => {
-      b.textContent = sombre ? '☀' : '☾';
-      b.title = sombre ? m.vers_clair : m.vers_sombre;
+      b.textContent = dark ? '☀' : '☾';
+      b.title = dark ? m.to_light : m.to_dark;
       b.setAttribute('aria-label', b.title);
     });
-    /* Groupe segmenté de la barre latérale : état + libellés (qui suivent la langue). */
+    /* Segmented group of the side bar: state + labels (which follow the language). */
     document.querySelectorAll('.themes button').forEach(b => {
-      const actif = b.dataset.themeSet === (sombre ? 'dark' : 'light');
-      b.setAttribute('aria-pressed', String(actif));
+      const active = b.dataset.themeSet === (dark ? 'dark' : 'light');
+      b.setAttribute('aria-pressed', String(active));
       b.textContent = (b.dataset.themeSet === 'dark' ? '☾ ' : '☀ ')
-                    + (b.dataset.themeSet === 'dark' ? m.theme_sombre : m.theme_clair);
+                    + (b.dataset.themeSet === 'dark' ? m.theme_dark : m.theme_light);
     });
     document.querySelectorAll('.themes').forEach(g => g.setAttribute('aria-label', m.theme_aria));
   }
   document.querySelectorAll('.themes button').forEach(b => b.addEventListener('click', () => {
     document.documentElement.dataset.theme = b.dataset.themeSet;
-    localStorage.setItem(CLE, b.dataset.themeSet);
-    majTheme();
+    localStorage.setItem(KEY, b.dataset.themeSet);
+    updateTheme();
   }));
   document.querySelectorAll('[data-theme-toggle]').forEach(b => b.addEventListener('click', () => {
-    const suivant = (document.documentElement.dataset.theme || 'dark') === 'dark' ? 'light' : 'dark';
-    document.documentElement.dataset.theme = suivant;
-    localStorage.setItem(CLE, suivant);
-    majTheme();
+    const next_ = (document.documentElement.dataset.theme || 'dark') === 'dark' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = next_;
+    localStorage.setItem(KEY, next_);
+    updateTheme();
   }));
 
   /* --- menu mobile --- */
-  const basculer = ouvrir => {
+  const toggle = ouvrir => {
     menu.classList.toggle('ouvert', ouvrir);
-    voile.classList.toggle('ouvert', ouvrir);
+    overlay.classList.toggle('ouvert', ouvrir);
   };
   document.querySelector('[data-menu-toggle]').addEventListener('click',
-    () => basculer(!menu.classList.contains('ouvert')));
-  voile.addEventListener('click', () => basculer(false));
-  liens.forEach(a => a.addEventListener('click', () => basculer(false)));
+    () => toggle(!menu.classList.contains('ouvert')));
+  overlay.addEventListener('click', () => toggle(false));
+  links.forEach(a => a.addEventListener('click', () => toggle(false)));
 
   addEventListener('hashchange', router);
-  majLangue(langue);
+  updateLang(lang);
   router();
 })();
 """
 
 
 # ===========================================================================
-#  Assemblage
+#  Assembly
 # ===========================================================================
 
-def selecteur_langue(mots: dict[str, str]) -> str:
-    """Boutons EN/FR. Rendu deux fois (barre latérale et barre mobile)."""
-    boutons = "".join(
-        f'<button type="button" data-langue="{l}" aria-pressed="false">{l.upper()}</button>'
-        for l in LANGUES
+def language_selector(words: dict[str, str]) -> str:
+    """EN/FR buttons. Rendered twice (side bar and mobile bar)."""
+    buttons = "".join(
+        f'<button type="button" data-lang="{l}" aria-pressed="false">{l.upper()}</button>'
+        for l in LANGUAGES
     )
-    return (f'<div class="langues" role="group" '
-            f'aria-label="{html.escape(mots["langue_aria"], quote=True)}">{boutons}</div>')
+    return (f'<div class="languages" role="group" '
+            f'aria-label="{html.escape(words["lang_aria"], quote=True)}">{buttons}</div>')
 
 
-def selecteur_theme(mots: dict[str, str]) -> str:
-    """Sélecteur clair/sombre EXPLICITE, posé dans la barre latérale.
+def theme_selector(words: dict[str, str]) -> str:
+    """EXPLICIT light/dark selector, placed in the side bar.
 
-    Il existait déjà deux bascules `data-theme-toggle` : une dans la barre mobile,
-    une flottante en bas à droite. Mais la barre mobile est `display:none` sur poste
-    fixe, si bien que le seul contrôle visible en desktop était une pastille ☀ sans
-    libellé, dans un coin, par-dessus le contenu — invisible en pratique.
+    Two `data-theme-toggle` switches already existed: one in the mobile bar, one
+    floating at the bottom right. But the mobile bar is `display:none` on a desktop, so
+    the only control visible there was an unlabelled ☀ pill, in a corner, on top of the
+    content — invisible in practice.
 
-    On ajoute donc un groupe segmenté « Clair / Sombre » calqué sur le sélecteur de
-    langue, au même endroit et avec la même forme : c'est là que l'œil le cherche.
-    Les deux bascules d'origine restent en place et partagent l'état.
+    So we add a segmented "Light / Dark" group modelled on the language selector, in the
+    same place and with the same shape: that is where the eye looks for it.
+    The two original switches stay in place and share the state.
     """
-    boutons = "".join(
-        f'<button type="button" data-theme-set="{valeur}" aria-pressed="false">'
-        f'{icone} {html.escape(mots[cle])}</button>'
-        for valeur, icone, cle in (("light", "☀", "theme_clair"), ("dark", "☾", "theme_sombre"))
+    buttons = "".join(
+        f'<button type="button" data-theme-set="{value}" aria-pressed="false">'
+        f'{icon} {html.escape(words[key_label])}</button>'
+        for value, icon, key_label in (("light", "☀", "theme_light"), ("dark", "☾", "theme_dark"))
     )
     return (f'<div class="themes" role="group" '
-            f'aria-label="{html.escape(mots["theme_aria"], quote=True)}">{boutons}</div>')
+            f'aria-label="{html.escape(words["theme_aria"], quote=True)}">{buttons}</div>')
 
 
-# Marque officielle GitHub (viewBox 16x16, tracé unique). Inline car la page doit
-# rester auto-contenue : aucune requête réseau au chargement.
+# Official GitHub mark (viewBox 16x16, single path). Inline because the page must
+# stay self-contained: no network request on load.
 SVG_GITHUB = (
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 0C3.58 0 '
     '0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01'
@@ -1021,145 +1021,145 @@ SVG_GITHUB = (
 )
 
 
-def lien_depot(mots: dict[str, str]) -> str:
-    """Badge « GitHub » de la ligne de marque, en haut du menu de gauche.
+def repo_link(words: dict[str, str]) -> str:
+    """The "GitHub" badge of the brand line, at the top of the left menu.
 
-    Le libellé visible reste « GitHub » dans les deux langues (c'est un nom
-    propre) ; seul l'intitulé accessible est traduit, et le JS le remet à jour
-    au changement de langue (cf. majLangue).
+    The visible label stays "GitHub" in both languages (it is a proper name); only the
+    accessible label is translated, and the JS refreshes it
+    au changement de lang (cf. updateLang).
     """
-    intitule = html.escape(mots["depot"], quote=True)
-    return (f'<a class="depot" href="{DEPOT_URL}" target="_blank" rel="noopener noreferrer"'
-            f' data-depot title="{intitule}" aria-label="{intitule}">{SVG_GITHUB}'
+    heading = html.escape(words["repo"], quote=True)
+    return (f'<a class="repo" href="{REPO_URL}" target="_blank" rel="noopener noreferrer"'
+            f' data-repo title="{heading}" aria-label="{heading}">{SVG_GITHUB}'
             f'<span>GitHub</span></a>')
 
 
-def lien_plateforme(mots: dict[str, str]) -> str:
-    """Lien vers la doc de la couche applicative, sortie de ce dépôt.
+def platform_link(words: dict[str, str]) -> str:
+    """Link to the application layer's documentation, outside this repository.
 
-    `_k8s/` est un sous-module pointant sur k8s-playground, partagé avec le lab Talos.
-    Sa documentation est publiée par ce dépôt-là ; on ne la duplique pas ici, on y renvoie.
-    Le lien est EXTERNE : il ouvre un nouvel onglet, comme le badge GitHub.
+    `_k8s/` is a submodule pointing at k8s-playground, shared with the Talos lab.
+    Its documentation is published by that repo; we do not duplicate it here, we link to it.
+    The link is EXTERNAL: it opens a new tab, like the GitHub badge.
     """
-    intitule = html.escape(mots["plateforme"], quote=True)
-    return (f'<a class="depot" href="{PLATEFORME_URL}" target="_blank" rel="noopener noreferrer"'
-            f' data-plateforme title="{intitule}" aria-label="{intitule}">☸️'
-            f'<span>{html.escape(mots["plateforme_court"])}</span></a>')
+    heading = html.escape(words["platform"], quote=True)
+    return (f'<a class="repo" href="{PLATFORM_URL}" target="_blank" rel="noopener noreferrer"'
+            f' data-platform title="{heading}" aria-label="{heading}">☸️'
+            f'<span>{html.escape(words["platform_short"])}</span></a>')
 
 
-def rendre(docs: list[dict]) -> list[dict]:
-    """Rend chaque document dans chaque langue (une entrée par page HTML)."""
-    md = creer_convertisseur()
-    rendus: list[dict] = []
+def render(docs: list[dict]) -> list[dict]:
+    """Renders every document in every language (one entry per HTML page)."""
+    md = create_converter()
+    rendered_pages: list[dict] = []
     for doc in docs:
-        for langue in LANGUES:
-            chemin = doc["chemins"][langue]
+        for lang in LANGUAGES:
+            path = doc["paths"][lang]
             page = {
-                "chemin": chemin,
+                "path": path,
                 "emoji": doc["emoji"],
-                "texte": lire(chemin),
-                "id": f"{langue}/{doc['id']}",
+                "text": read_file(path),
+                "id": f"{lang}/{doc['id']}",
             }
-            r = convertir(md, page)
-            rendus.append({
+            r = convert(md, page)
+            rendered_pages.append({
                 **r,
                 "id": page["id"],
                 "doc": doc["id"],
-                "langue": langue,
-                "chemin": chemin,
-                "groupe": doc["groupe"][langue],
-                "suivi": doc["suivi"],
-                # un document sans miroir s'affiche en anglais dans le menu français ;
-                # ceux de SANS_MIROIR l'assument et ne portent pas de badge
-                "traduit": (doc["chemins"]["en"] != doc["chemins"]["fr"]
-                            or langue == "en" or doc["chemin"] in SANS_MIROIR),
+                "lang": lang,
+                "path": path,
+                "group": doc["group"][lang],
+                "tracked": doc["tracked"],
+                # a document without a mirror shows in English inside the French menu;
+                # the ones in WITHOUT_MIRROR own that and carry no badge
+                "translated": (doc["paths"]["en"] != doc["paths"]["fr"]
+                            or lang == "en" or doc["path"] in WITHOUT_MIRROR),
             })
-    return rendus
+    return rendered_pages
 
 
-def construire(rendus: list[dict], version: str, alertes: list[str]) -> str:
-    # index chemin → route, par langue : les liens d'une page française visent
-    # les miroirs français ; le chemin anglais sert de repli (page non traduite).
-    index: dict[str, dict[str, str]] = {l: {} for l in LANGUES}
-    ancres: dict[str, set[str]] = {}
-    for r in rendus:
-        index[r["langue"]][r["chemin"]] = r["id"]
-        ancres[r["id"]] = set(RE_ID_TITRE.findall(r["corps"]))
-    for r in rendus:
-        index[r["langue"]].setdefault(
-            next(x["chemin"] for x in rendus
-                 if x["doc"] == r["doc"] and x["langue"] == "en"), r["id"])
+def build_page(rendered_pages: list[dict], version: str, warnings: list[str]) -> str:
+    # path → route index, per language: the links of a French page target the French
+    # mirrors; the English path is the fallback (untranslated page).
+    index: dict[str, dict[str, str]] = {l: {} for l in LANGUAGES}
+    anchors: dict[str, set[str]] = {}
+    for r in rendered_pages:
+        index[r["lang"]][r["path"]] = r["id"]
+        anchors[r["id"]] = set(RE_HEADING_ID.findall(r["body"]))
+    for r in rendered_pages:
+        index[r["lang"]].setdefault(
+            next(x["path"] for x in rendered_pages
+                 if x["doc"] == r["doc"] and x["lang"] == "en"), r["id"])
 
     articles: list[str] = []
-    menus: dict[str, dict[str, list[str]]] = {l: {} for l in LANGUES}
+    menus: dict[str, dict[str, list[str]]] = {l: {} for l in LANGUAGES}
 
-    for r in rendus:
-        mots = LIBELLES[r["langue"]]
-        corps = inliner_images(resoudre(r, index, ancres, alertes),
-                               r["chemin"], alertes)
+    for r in rendered_pages:
+        words = LABELS[r["lang"]]
+        body = inline_images(resolve(r, index, anchors, warnings),
+                               r["path"], warnings)
         badges = ""
-        if not r["suivi"]:
-            badges += (f'<span class="badge" title="{html.escape(mots["badge_titre"], quote=True)}">'
-                       f'{html.escape(mots["badge"])}</span>')
-        if not r["traduit"]:
-            badges += (f'<span class="badge badge-langue" '
-                       f'title="{html.escape(mots["badge_langue_titre"], quote=True)}">'
-                       f'{html.escape(mots["badge_langue"])}</span>')
+        if not r["tracked"]:
+            badges += (f'<span class="badge" title="{html.escape(words["badge_title"], quote=True)}">'
+                       f'{html.escape(words["badge"])}</span>')
+        if not r["translated"]:
+            badges += (f'<span class="badge badge-lang" '
+                       f'title="{html.escape(words["badge_lang_title"], quote=True)}">'
+                       f'{html.escape(words["badge_lang"])}</span>')
 
-        # premier encart promu en chapeau sous le titre (le H1 neutralisé laisse
-        # des blancs en tête : d'où le lstrip avant de matcher)
-        chapeau = ""
-        corps = corps.lstrip()
-        m = re.match(r'<blockquote class="encart[^"]*">(.*?)</blockquote>\s*', corps, re.DOTALL)
+        # first callout promoted to the lead under the title (the neutralised H1 leaves
+        # blanks at the start: hence the lstrip before matching)
+        lead = ""
+        body = body.lstrip()
+        m = re.match(r'<blockquote class="callout[^"]*">(.*?)</blockquote>\s*', body, re.DOTALL)
         if m:
-            chapeau, corps = m.group(1), corps[m.end():]
+            lead, body = m.group(1), body[m.end():]
 
         articles.append(
             f'<article class="page" id="{r["id"]}" data-doc="{r["doc"]}" '
-            f'data-langue="{r["langue"]}" '
-            f'data-titre="{html.escape(r["titre_texte"], quote=True)}">'
-            f'<div class="fil"><span>{html.escape(r["chemin"])}</span>{badges}</div>'
-            f'<h1><span class="emo">{r["emoji"]}</span>{r["titre_html"]}</h1>'
-            f'{f"""<div class="sous-titre">{chapeau}</div>""" if chapeau else ""}'
-            f'{corps}'
-            f'<div class="pied">'
-            f'<span>{html.escape(mots["source"])} <code>{html.escape(r["chemin"])}</code></span>'
-            f'<span>{len(r["sommaire"])} {html.escape(mots["sections"])}</span></div>'
+            f'data-lang="{r["lang"]}" '
+            f'data-title="{html.escape(r["title_text"], quote=True)}">'
+            f'<div class="crumb"><span>{html.escape(r["path"])}</span>{badges}</div>'
+            f'<h1><span class="emo">{r["emoji"]}</span>{r["title_html"]}</h1>'
+            f'{f"""<div class="subtitle">{lead}</div>""" if lead else ""}'
+            f'{body}'
+            f'<div class="footer">'
+            f'<span>{html.escape(words["source"])} <code>{html.escape(r["path"])}</code></span>'
+            f'<span>{len(r["toc"])} {html.escape(words["sections"])}</span></div>'
             "</article>"
         )
 
-        recherche = html.escape(" ".join(
-            [r["titre_texte"], r["chemin"], *(s["titre"] for s in r["sommaire"])]).lower(),
+        search = html.escape(" ".join(
+            [r["title_text"], r["path"], *(s["title"] for s in r["toc"])]).lower(),
             quote=True)
-        menus[r["langue"]].setdefault(r["groupe"], []).append(
-            f'<a href="#{r["id"]}" data-page="{r["id"]}" data-recherche="{recherche}">'
+        menus[r["lang"]].setdefault(r["group"], []).append(
+            f'<a href="#{r["id"]}" data-page="{r["id"]}" data-search="{search}">'
             f'<span class="emo">{r["emoji"]}</span>'
-            f'<span class="txt">{html.escape(r["titre_texte"])}{badges}'
-            f'<span class="chemin">{html.escape(r["chemin"])}</span></span></a>'
+            f'<span class="txt">{html.escape(r["title_text"])}{badges}'
+            f'<span class="path">{html.escape(r["path"])}</span></span></a>'
         )
 
-    arbres = []
-    for langue in LANGUES:
-        ordre = [g[0][langue] for g in GROUPES] + [AUTRES[langue]]
+    trees = []
+    for lang in LANGUAGES:
+        order = [g[0][lang] for g in GROUPS] + [OTHER[lang]]
         nav = "".join(
-            f'<nav class="groupe"><h2>{html.escape(g)}</h2>{"".join(menus[langue][g])}</nav>'
-            for g in ordre if g in menus[langue]
+            f'<nav class="group"><h2>{html.escape(g)}</h2>{"".join(menus[lang][g])}</nav>'
+            for g in order if g in menus[lang]
         )
-        arbres.append(f'<div class="arbre" data-langue="{langue}" hidden>{nav}</div>')
+        trees.append(f'<div class="tree" data-lang="{lang}" hidden>{nav}</div>')
 
-    mots = LIBELLES[LANGUE_DEFAUT]
-    js = (JS.replace("__LANGUES__", json.dumps(list(LANGUES)))
-            .replace("__LIBELLES__", json.dumps(LIBELLES, ensure_ascii=False))
-            .replace("__DEFAUT__", json.dumps(LANGUE_DEFAUT)))
+    words = LABELS[DEFAULT_LANGUAGE]
+    js = (JS.replace("__LANGUAGES__", json.dumps(list(LANGUAGES)))
+            .replace("__LABELS__", json.dumps(LABELS, ensure_ascii=False))
+            .replace("__DEFAULT_LANG__", json.dumps(DEFAULT_LANGUAGE)))
 
     return f"""<!doctype html>
-<html lang="{LANGUE_DEFAUT}">
+<html lang="{DEFAULT_LANGUAGE}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="dark light">
 <meta name="generator" content="docs/build.py">
-<meta name="description" content="{html.escape(mots['sous_titre'], quote=True)}">
+<meta name="description" content="{html.escape(words['subtitle'], quote=True)}">
 <title>Vagrant-KubeADM · Documentation</title>
 <style>
 {CSS}
@@ -1167,35 +1167,35 @@ def construire(rendus: list[dict], version: str, alertes: list[str]) -> str:
 </style>
 </head>
 <body>
-<div class="voile"></div>
-<header class="barre">
-  <button class="bouton-icone" data-menu-toggle aria-label="{html.escape(mots['menu'], quote=True)}">☰</button>
+<div class="overlay"></div>
+<header class="topbar">
+  <button class="icon-button" data-menu-toggle aria-label="{html.escape(words['menu'], quote=True)}">☰</button>
   <strong>Vagrant-KubeADM</strong>
-  {selecteur_langue(mots)}
-  <button class="bouton-icone" data-theme-toggle>☀</button>
+  {language_selector(words)}
+  <button class="icon-button" data-theme-toggle>☀</button>
 </header>
-<div class="enveloppe">
+<div class="wrapper">
   <aside class="menu">
-    <div class="marque">
-      <div class="marque-titre">
+    <div class="brand">
+      <div class="brand-title">
         <span class="logo">🐧</span>
         <span>Vagrant-KubeADM<small>{html.escape(version)}</small></span>
       </div>
-      {lien_depot(mots)}
-      {lien_plateforme(mots)}
+      {repo_link(words)}
+      {platform_link(words)}
     </div>
-    {selecteur_langue(mots)}
-    {selecteur_theme(mots)}
-    <div class="recherche">
-      <input type="search" placeholder="{html.escape(mots['recherche'], quote=True)}"
-             aria-label="{html.escape(mots['recherche_aria'], quote=True)}">
+    {language_selector(words)}
+    {theme_selector(words)}
+    <div class="search">
+      <input type="search" placeholder="{html.escape(words['search'], quote=True)}"
+             aria-label="{html.escape(words['search_aria'], quote=True)}">
     </div>
-    {"".join(arbres)}
+    {"".join(trees)}
   </aside>
-  <main class="contenu">{"".join(articles)}</main>
-  <aside class="sommaire" aria-label="{html.escape(mots['sommaire'], quote=True)}"></aside>
+  <main class="content">{"".join(articles)}</main>
+  <aside class="toc" aria-label="{html.escape(words['toc'], quote=True)}"></aside>
 </div>
-<button class="bouton-icone theme-flottant" data-theme-toggle>☀</button>
+<button class="icon-button theme-floating" data-theme-toggle>☀</button>
 <script>{js}</script>
 </body>
 </html>
@@ -1203,45 +1203,45 @@ def construire(rendus: list[dict], version: str, alertes: list[str]) -> str:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Génère la documentation HTML du lab.")
-    ap.add_argument("--out", default=str(RACINE / "docs" / "index.html"),
-                    help="fichier de sortie (défaut : docs/index.html)")
+    ap = argparse.ArgumentParser(description="Generates the lab's HTML documentation.")
+    ap.add_argument("--out", default=str(ROOT / "docs" / "index.html"),
+                    help="output file (default: docs/index.html)")
     ap.add_argument("--strict", action="store_true",
-                    help="échoue si un lien interne ou une ancre ne résout pas")
+                    help="fail when an internal link or anchor does not resolve")
     args = ap.parse_args()
 
-    docs = decouvrir()
+    docs = discover()
     if not docs:
-        print("Aucun fichier markdown trouvé.", file=sys.stderr)
+        print("No markdown file found.", file=sys.stderr)
         return 1
     for doc in docs:  # identifiant de route, stable et lisible
         doc["id"] = re.sub(r"[^a-z0-9]+", "-",
-                           doc["chemin"].lower().removesuffix(".md")).strip("-")
+                           doc["path"].lower().removesuffix(".md")).strip("-")
 
-    alertes: list[str] = []
-    rendus = rendre(docs)
-    sortie = Path(args.out)
-    sortie.parent.mkdir(parents=True, exist_ok=True)
-    sortie.write_text(
-        construire(rendus, git("log", "-1", "--format=%h · %cs") or "local", alertes),
+    warnings: list[str] = []
+    rendered_pages = render(docs)
+    output = Path(args.out)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        build_page(rendered_pages, git("log", "-1", "--format=%h · %cs") or "local", warnings),
         encoding="utf-8")
 
-    affiche = sortie.relative_to(RACINE) if sortie.is_relative_to(RACINE) else sortie
-    print(f"✅ {affiche} — {len(docs)} documents × {len(LANGUES)} langues "
-          f"= {len(rendus)} pages, {sortie.stat().st_size // 1024} Ko")
+    display = output.relative_to(ROOT) if output.is_relative_to(ROOT) else output
+    print(f"✅ {display} — {len(docs)} documents × {len(LANGUAGES)} languages "
+          f"= {len(rendered_pages)} pages, {output.stat().st_size // 1024} Ko")
     for doc in docs:
-        etat = "" if doc["suivi"] else "  (non commité)"
-        miroir = doc["chemins"]["fr"]
-        if miroir == doc["chemin"]:
-            # distinguer l'oubli (à corriger) du choix assumé (SANS_MIROIR)
-            etat += ("  (EN seulement, assumé)" if doc["chemin"] in SANS_MIROIR
-                     else "  (⚠️ pas de miroir FR)")
-            miroir = "—"
-        print(f"   {doc['emoji']} {doc['chemin']:44s} ↔ {miroir}{etat}")
+        state = "" if doc["tracked"] else "  (untracked)"
+        mirror = doc["paths"]["fr"]
+        if mirror == doc["path"]:
+            # tell an oversight (to fix) from a deliberate choice (WITHOUT_MIRROR)
+            state += ("  (EN only, by design)" if doc["path"] in WITHOUT_MIRROR
+                     else "  (⚠️ no FR mirror)")
+            mirror = "—"
+        print(f"   {doc['emoji']} {doc['path']:44s} ↔ {mirror}{state}")
 
-    if alertes:
-        print(f"\n⚠️ {len(alertes)} lien(s) interne(s) non résolu(s) :", file=sys.stderr)
-        for a in sorted(set(alertes)):
+    if warnings:
+        print(f"\n⚠️ {len(warnings)} unresolved internal link(s):", file=sys.stderr)
+        for a in sorted(set(warnings)):
             print(f"   {a}", file=sys.stderr)
         if args.strict:
             return 1
