@@ -6,10 +6,12 @@
 
 > Organisé par **symptôme observé**, parce que c'est ce qu'on a sous les yeux : un message
 > d'erreur, pas une théorie. Parcours d'installation : [`LISEZ-MOI.md`](LISEZ-MOI.md) · couche
-> applicative : [`_k8s/LISEZ-MOI.md`](_k8s/LISEZ-MOI.md) · montées de version :
+> applicative : <https://ops-nc.github.io/k8s-playground/> · montées de version :
 > [`kubeadm/MISE-A-JOUR.md`](kubeadm/MISE-A-JOUR.md).
 
-Chaque `_k8s/<addon>/LISEZ-MOI.md` porte ses **propres** pièges, spécifiques à lui (Longhorn,
+La couche applicative vit dans son **propre dépôt**
+([k8s-playground](https://github.com/OPS-NC/k8s-playground), monté ici comme sous-module
+`_k8s/`) et chacun de ses addons porte ses **propres** pièges, sur son propre site (Longhorn,
 Vault, Calico…). Cette page couvre le lab lui-même : l'hôte, VirtualBox, keepalived, kubeadm et
 les nodes Debian.
 
@@ -17,11 +19,12 @@ Sauf mention contraire, toutes les commandes se lancent **depuis la racine du d�
 
 ```bash
 export KUBECONFIG="$PWD/kubeconfig"
+export LAB_DIR="$PWD"          # exigé par les scripts _k8s/ — voir la section 1
 ```
 
 ---
 
-## 🖥️ 1. Hôte et VirtualBox
+## 🖥️ 1. Hôte, dépôt et VirtualBox
 
 ### `vagrant up` meurt sur `VERR_VMX_IN_VMX_ROOT_MODE`
 
@@ -77,6 +80,57 @@ Le `Vagrantfile` refuse aussi une IP de node qui tombe sur `192.168.56.1` (passe
 host-only), `.2` (DHCP VirtualBox), `.100` (plage DHCP host-only par défaut de VirtualBox) ou la
 VIP, ainsi que deux nodes sur la même IP. Ces erreurs nomment toutes la variable en cause
 (`CP_IP_START`/`CP_IP_STEP`, `WK_IP_START`/`WK_IP_STEP`).
+
+### `_k8s/` est vide, ou `./_k8s/install.sh: No such file or directory`
+
+```bash
+ls _k8s/            # rien, ou un dossier vide
+./_k8s/install.sh kubeadm platform
+# bash: ./_k8s/install.sh: No such file or directory
+```
+
+**Cause.** `_k8s/` est un **sous-module git** qui pointe sur
+[k8s-playground](https://github.com/OPS-NC/k8s-playground) — la couche applicative partagée
+avec le lab jumeau Talos. Un `git clone` simple enregistre le sous-module mais ne le sort
+**pas** : le dossier reste vide.
+
+```bash
+git submodule update --init --recursive     # remplit _k8s/
+git -C _k8s log --oneline -1                # vérification : il y a bien un commit dedans
+```
+
+Pour cloner correctement dès le départ : `git clone --recurse-submodules <url>`.
+
+> ⚠️ **Un `git pull` ne met pas le sous-module à jour non plus.** Il ne déplace que ce dépôt ;
+> `_k8s/` reste sur le commit sorti précédemment, et on exécute alors les commandes documentées
+> contre une couche applicative plus ancienne. Relancer `git submodule update --init
+> --recursive` après chaque pull, ou `git submodule update --remote _k8s` pour sauter au
+> dernier commit amont.
+
+### Les scripts `_k8s/` ne trouvent ni `lab.env` ni le kubeconfig
+
+Symptômes : les addons s'installent sur le **mauvais domaine** (`lab.example.io` au lieu de ton
+`LAB_DOMAIN`), le **mauvais CNI** est retenu, ou chaque appel `kubectl` interne aux scripts
+échoue en `connection refused` / `no configuration has been provided`. La bannière affichée au
+démarrage des scripts indique `lab.env : absent (défauts)`.
+
+**Cause.** `LAB_DIR` n'est pas exporté. k8s-playground cherche `lab.env` et `_out/` dans cet
+ordre : `$LAB_DIR` / `$LAB_ENV` → sa propre racine → `<sa racine>/../Vagrant-KubeADM`. Ce
+dernier chemin suppose les deux dépôts **voisins**. Monté en sous-module, sa racine *est*
+`Vagrant-KubeADM/_k8s` : le chemin devient donc `Vagrant-KubeADM/Vagrant-KubeADM`, qui n'existe
+pas — et la résolution retombe sur `_k8s/` lui-même, où il n'y a ni `lab.env` ni `_out/`.
+
+**Correctif.** L'exporter à côté de `KUBECONFIG`, depuis la racine du dépôt :
+
+```bash
+export KUBECONFIG="$PWD/kubeconfig"
+export LAB_DIR="$PWD"
+./_k8s/install.sh kubeadm platform
+```
+
+> 💡 `LAB_ENV=/chemin/vers/lab.env` rend le même service quand le fichier ne s'appelle pas
+> `lab.env` ou ne vit pas à la racine du lab. `LAB_DIR` est celle à retenir : elle pilote
+> `lab.env`, `_out/cluster.env` **et** le `KUBECONFIG` par défaut d'un coup.
 
 ---
 
@@ -199,7 +253,7 @@ k8s-cp1   NotReady   control-plane   2m    v1.36.3
 k8s-w1    NotReady   worker          1m    v1.36.3
 ```
 
-**C'est NORMAL entre `kubeadm/cluster-up.sh` et `_k8s/platform-up.sh`.** kubeadm n'installe
+**C'est NORMAL entre `kubeadm/cluster-up.sh` et l'étape plateforme.** kubeadm n'installe
 aucun CNI, et un node sans réseau pod ne passe jamais `Ready`. `cluster-up.sh` le dit lui-même
 dans sa bannière de fin.
 
@@ -219,7 +273,7 @@ message:Network plugin returns error: cni plugin not initialized
 **Correctif :** lance l'étape suivante.
 
 ```bash
-./_k8s/platform-up.sh
+./_k8s/install.sh kubeadm platform
 ```
 
 Avec `CNI=none`, personne n'installera jamais de réseau — c'est le sens du réglage, et
@@ -250,7 +304,8 @@ kubectl -n kube-system describe pod -l k8s-app=kube-dns | sed -n '/Events:/,$p'
 ```
 
 CoreDNS se planifie dès que le premier node passe `Ready`. Rien à corriger : lance
-`./_k8s/platform-up.sh`. Si CoreDNS reste `Pending` **après** que les nodes soient `Ready`,
+`./_k8s/install.sh kubeadm platform`. Si CoreDNS reste `Pending` **après** que les nodes soient
+`Ready`,
 cherche alors de vraies contraintes de placement (`WORKERS=0` avec `UNTAINT_CP=false`, par
 exemple, ne laisse aucun endroit où planifier).
 
@@ -475,7 +530,7 @@ kubectl -n envoy-gateway-system get svc
 **Cause 1 — le CNI n'est pas Cilium.** Dans ce lab, seul Cilium distribue des IP de Service
 (annonce L2/ARP). Calico ne sait le faire qu'en BGP, et il n'y a aucun routeur pair sur un
 réseau host-only (MetalLB requis) ; flannel et `none` ne font rien du tout.
-`_k8s/platform-up.sh` le dit explicitement à l'exécution, et il retire le
+`install.sh kubeadm platform` le dit explicitement à l'exécution, et il retire le
 `loadBalancerClass: io.cilium/l2-announcer` propre à Cilium pour qu'un autre annonceur puisse
 prendre le relais.
 
@@ -503,7 +558,7 @@ inexistante, produisent tous deux un `<pending>` définitif.
 Changer le pool tient en une relance :
 
 ```bash
-./_k8s/cilium/cilium-up.sh
+./_k8s/cilium/cilium-up.sh kubeadm
 ```
 
 ---
@@ -572,7 +627,7 @@ la **première IP de la plage**, `192.168.56.200` par défaut.
 **2. Le nom résout-il vers cette IP ?**
 
 Le domaine du lab (`LAB_DOMAIN`, `kubeadm.lab.example.io` par défaut) n'a aucune raison de
-résoudre sur ta machine. `_k8s/platform-up.sh` affiche la ligne à ajouter :
+résoudre sur ta machine. `install.sh kubeadm platform` affiche la ligne à ajouter :
 
 ```bash
 # /etc/hosts sur l'HÔTE
@@ -695,3 +750,6 @@ sudo kubeadm config images list --kubernetes-version v1.36.3
 - [Cilium — Troubleshooting](https://docs.cilium.io/en/stable/operations/troubleshooting/)
 - [etcd — Tuning](https://etcd.io/docs/latest/tuning/)
 - [`kubeadm/MISE-A-JOUR.md`](kubeadm/MISE-A-JOUR.md) — montées de version et renouvellement des certificats
+- [k8s-playground](https://ops-nc.github.io/k8s-playground/) — la couche applicative `_k8s/`,
+  addon par addon, avec ses propres sections de pièges
+- [Git — Submodules](https://git-scm.com/book/en/v2/Git-Tools-Submodules)

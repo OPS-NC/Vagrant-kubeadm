@@ -41,6 +41,13 @@ jobs:
       - name: make validate-defaults
         run: make validate-defaults
 
+      # `_k8s/` est un sous-module public (k8s-playground). Ce test garantit qu'un
+      # `git clone --recurse-submodules` fonctionnera pour un tiers : URL en https (et
+      # non en SSH, inutilisable sans clé) et commit épinglé réellement poussé. Les deux
+      # erreurs sont invisibles depuis la machine de celui qui les commet.
+      - name: make validate-submodule
+        run: make validate-submodule
+
   yaml:
     name: Syntaxe des YAML
     runs-on: ubuntu-latest
