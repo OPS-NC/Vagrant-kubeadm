@@ -45,8 +45,9 @@ place to maintain it. Its documentation is published separately at
 ```
 lab.env  ──────────────► Vagrantfile ──► kubeadm/provision.sh        (in each VM, at `vagrant up`)
    │  (single source)         │
-   │                          └─ 7 steps: /etc/hosts · kernel prereqs · base packages ·
-   │                             containerd · kubelet/kubeadm/kubectl (+ hold) · image pull ·
+   │                          └─ 8 steps: /etc/hosts · system upgrade (SYSTEM_UPGRADE) ·
+   │                             kernel prereqs · base packages · containerd ·
+   │                             kubelet/kubeadm/kubectl (+ hold) · image pull ·
    │                             keepalived (control planes only)
    │
    ├──────────────────► kubeadm/cluster-up.sh                        (on the HOST)
@@ -90,7 +91,6 @@ VM (workers first, so they deregister while the API still answers).
 | `docs/build.py` | generates the single-page bilingual `docs/index.html`. |
 | `Makefile` | `make validate`, `make docs`. Nothing here ever touches a running cluster. |
 | `.github/workflows/` | CI calls the **same** `make` targets. Never duplicate a check's definition in a workflow. |
-| `bootstrap.sh`, `README-installkubeadm.md` | **legacy scratch notes** from before the repo took shape (K3s-era registry mirror, hand-typed install). Referenced by nothing. Do not wire them into anything; do not "fix" them either without being asked. |
 
 ### The files that carry state between layers
 
