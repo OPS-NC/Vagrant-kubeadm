@@ -48,7 +48,7 @@ VirtualBox 7 only allows explicitly permitted host-only ranges:
 * 192.168.56.0/21
 ```
 
-The whole lab lives in that `/24` — nodes, the `.5` VIP, the `.200`–`.230` LoadBalancer pool — so
+The whole lab lives in that `/24` (nodes, the `.5` VIP, the `.200`–`.230` LoadBalancer pool), so
 nothing works until VirtualBox accepts it.
 
 ### `vagrant up` refuses an even number of control planes
@@ -73,7 +73,7 @@ git -C _k8s log --oneline -1                # sanity check
 ```
 
 Clone correctly next time with `git clone --recurse-submodules <url>`. `git pull` does not update
-the submodule either — repeat the command above after every pull, or
+the submodule either: repeat the command above after every pull, or
 `git submodule update --remote _k8s` to jump to the latest upstream commit.
 
 ### The `_k8s/` scripts find neither `lab.env` nor the kubeconfig
@@ -83,7 +83,7 @@ Symptoms: addons install into the **wrong domain** (`lab.example.io` instead of 
 `connection refused`. The banner the scripts print at start-up shows `lab.env: absent (defaults)`.
 
 The lab was not located. k8s-playground has no `Vagrantfile` of its own: it takes the directory
-*containing* `_k8s/` as the lab, provided that directory carries a `Vagrantfile` — that is where
+*containing* `_k8s/` as the lab, provided that directory carries a `Vagrantfile`. That is where
 `lab.env`, `_out/` and `kubeconfig` live. The same walk decides the distribution
 (`kubeadm/cluster-up.sh` next to the `Vagrantfile` = kubeadm lab), so a lab that is not found also
 means a distribution that is not detected.
@@ -119,7 +119,7 @@ ERROR: the apiserver does not answer on the VIP 192.168.56.5 after 600s.
 `kubeadm init` has already run: the script is waiting for `/readyz` **through the VIP**, the
 address every other node will use to join. Two causes, by frequency.
 
-**Cause 1 — keepalived is not carrying the VIP.**
+**Cause 1: keepalived is not carrying the VIP.**
 
 ```bash
 vagrant ssh k8s-cp1 -c "ip -4 addr show | grep 192.168.56.5"
@@ -133,7 +133,7 @@ vagrant ssh k8s-cp1 -c "sudo journalctl -u keepalived -n 50 --no-pager"
 | `keepalived.service: failed`, `Cant find interface` | keepalived was configured on the wrong interface |
 | `Entering BACKUP STATE` on every control plane | the peers see each other but nobody promotes |
 
-The interface is **detected**, never hard-coded — check what `provision.sh` found:
+The interface is **detected**, never hard-coded. Check what `provision.sh` found:
 
 ```bash
 vagrant ssh k8s-cp1 -c "cat /etc/kubeadm-lab/node.env"
@@ -144,7 +144,7 @@ If `HOSTONLY_IF` fell back to `eth1` while the VM really uses `enp0s8`, keepaliv
 interface that does not exist. Re-run `vagrant provision k8s-cp1` once the VM has its host-only
 address.
 
-**Cause 2 — the apiserver itself does not start.**
+**Cause 2: the apiserver itself does not start.**
 
 ```bash
 vagrant ssh k8s-cp1 -c "sudo crictl ps -a | grep apiserver"
@@ -152,13 +152,13 @@ vagrant ssh k8s-cp1 -c "sudo journalctl -u kubelet -n 50 --no-pager"
 vagrant ssh k8s-cp1 -c "sudo crictl logs \$(sudo crictl ps -a -q --name kube-apiserver | head -1)"
 ```
 
-A `CrashLoopBackOff` apiserver is almost always etcd underneath — see section 5. Note that
+A `CrashLoopBackOff` apiserver is almost always etcd underneath (see section 5). Note that
 keepalived's health check only subtracts 30 priority points, it never drops the VIP, so **the VIP
 being up proves nothing about the apiserver.**
 
 ### The VIP is held by TWO nodes at once (VRRP split-brain)
 
-`kubectl` behaves erratically — one request succeeds, the next times out — and the journal shows
+`kubectl` behaves erratically: one request succeeds, the next times out. The journal shows
 `Entering MASTER STATE` on two nodes.
 
 ```bash
@@ -217,7 +217,7 @@ kubectl describe node k8s-cp1 | sed -n '/Conditions:/,/Addresses:/p'
 # Ready False — KubeletNotReady — cni plugin not initialized
 ```
 
-Fix: `./_k8s/platform-up.sh`. With `CNI=none` nothing will ever install a network — that is what
+Fix: `./_k8s/platform-up.sh`. With `CNI=none` nothing will ever install a network: that is what
 the setting means, and `cluster-up.sh` prints a different closing message in that case.
 
 Still `NotReady` after the CNI install, or CoreDNS still `Pending` after the nodes are `Ready`:
@@ -240,11 +240,11 @@ kubectl -n kube-system logs deploy/cilium-operator --tail=50
 
 Each VM has two NICs: NIC1 = VirtualBox NAT (always `10.0.2.15`, *identical on every VM*) and
 NIC2 = host-only (the real cluster address). Without `kubeletExtraArgs: node-ip` the kubelet picks
-the default-route interface — the NAT one. `kubectl get nodes` looks plausible, but logs, `exec`,
+the default-route interface, which is the NAT one. `kubectl get nodes` looks plausible, but logs, `exec`,
 probes and cross-node traffic all go to the wrong place.
 
 The lab sets `node-ip` in all three templates, so you only hit this on a node joined **by hand**
-with the printed `kubeadm join` line — that line cannot carry `node-ip`.
+with the printed `kubeadm join` line, which cannot carry `node-ip`.
 
 ```bash
 vagrant ssh k8s-w1 -c "cat /var/lib/kubelet/kubeadm-flags.env"
@@ -265,7 +265,7 @@ change, `kubectl delete node k8s-w1` so the kubelet re-registers.
 | `error decoding certificate key` / decryption failure | the key does not match the Secret | **2 h** |
 
 Easy fix: re-run `./kubeadm/cluster-up.sh`. It is idempotent, and `node-init.sh` regenerates both
-elements on every run before rewriting `_out/join.env` — joining a node days after the initial
+elements on every run before rewriting `_out/join.env`. Joining a node days after the initial
 `init` is a supported path.
 
 By hand, if you are driving kubeadm yourself (both are safe to replay on a running cluster):
@@ -277,8 +277,8 @@ vagrant ssh k8s-cp1 -c "sudo kubeadm token create --print-join-command"        #
 ```
 
 > ⚠️ Run `upload-certs` **with `--config`**. Without it, kubeadm builds its API client from a
-> `LocalAPIEndpoint.AdvertiseAddress` it detects off the default route — `10.0.2.15` in any
-> Vagrant VM — and TLS fails on `x509: certificate is valid for …, not 10.0.2.15`. The endpoint is
+> `LocalAPIEndpoint.AdvertiseAddress` it detects off the default route (`10.0.2.15` in any
+> Vagrant VM), and TLS fails on `x509: certificate is valid for …, not 10.0.2.15`. The endpoint is
 > what must be corrected: never add `10.0.2.15` to `certSANs`, it identifies no node at all.
 
 ### kubeadm preflight complains about swap, CPU count or memory
@@ -291,7 +291,7 @@ vagrant ssh k8s-cp1 -c "sudo kubeadm token create --print-join-command"        #
 
 **Swap** is already handled by `provision.sh`: `swapoff -a`, the `/etc/fstab` line commented out,
 **and** any systemd swap unit masked (Debian 13 can provide swap through a unit `/etc/fstab` never
-mentions — that is how swap comes back after a reboot). The error showing up anyway means
+mentions; that is how swap comes back after a reboot). The error showing up anyway means
 provisioning did not finish:
 
 ```bash
@@ -320,7 +320,7 @@ vagrant ssh k8s-cp1 -c "sudo grep SystemdCgroup /etc/containerd/config.toml"   #
 ```
 
 With `CONTAINERD_SOURCE=docker` (the default) the warning disappears. With
-`CONTAINERD_SOURCE=debian` it is expected — harmless in 1.36, **fatal in 1.37** where the fallback
+`CONTAINERD_SOURCE=debian` it is expected: harmless in 1.36, **fatal in 1.37** where the fallback
 is removed, so that value is an offline-lab option and a dead end for upgrades.
 
 > ⚠️ What really matters is `SystemdCgroup = true`. Debian 13 is cgroup v2 with systemd as the
@@ -338,7 +338,7 @@ complains about pre-existing BPF maps.
 
 `kubeadm reset` deliberately leaves behind what it did not lay down: CNI interfaces, **pinned eBPF
 programs**, and kube-proxy's iptables rules, so a later `kubeadm init` inherits a ghost datapath.
-`kubeadm/node-reset.sh` is the cleanup and `cluster-reset.sh` runs it everywhere — it removes
+`kubeadm/node-reset.sh` is the cleanup and `cluster-reset.sh` runs it everywhere. It removes
 `/etc/cni/net.d/*`, the `cilium_*`/`flannel.1`/`cni0`/`vxlan.calico`/`kube-ipvs0`/`lxc*`/`cali*`
 interfaces, the pinned programs under `/sys/fs/bpf/tc/globals/cilium_*`, the `KUBE-`/`CILIUM_`/
 `cali-` chains and IPVS, then wipes `/var/lib/etcd`, `/var/lib/cni`, `/run/flannel` and restarts
@@ -352,7 +352,7 @@ vagrant ssh k8s-w1 -c "sudo ls /sys/fs/bpf/tc/globals/ 2>/dev/null"
 vagrant ssh k8s-w1 -c "sudo iptables-save | grep -cE 'KUBE-|CILIUM_|cali-'"
 ```
 
-Anything non-empty means the cleanup did not complete — the script prints `partial reset on
+Anything non-empty means the cleanup did not complete: the script prints `partial reset on
 <node> — carrying on` rather than stopping. Re-run it there:
 `vagrant ssh k8s-w1 -c "sudo bash /vagrant/kubeadm/node-reset.sh"`. In doubt,
 `vagrant destroy -f && vagrant up` is the guaranteed clean slate.
@@ -362,7 +362,7 @@ Anything non-empty means the cleanup did not complete — the script prints `par
 
 ### A `LoadBalancer` Service stays `<pending>`
 
-**Cause 1 — the CNI is not Cilium.** Only Cilium hands out Service IPs here (L2/ARP announcement).
+**Cause 1: the CNI is not Cilium.** Only Cilium hands out Service IPs here (L2/ARP announcement).
 Calico needs BGP and there is no peer router on a host-only network (MetalLB required); flannel
 and `none` do nothing.
 
@@ -373,7 +373,7 @@ sed -n 's/^CNI=//p' _out/cluster.env      # what the cluster was actually built 
 > ⚠️ `_out/cluster.env` is the truth (written at bootstrap); `lab.env` is only an *intent* and may
 > have been edited afterwards.
 
-**Cause 2 — the L2 pool is missing, exhausted or announced on the wrong interface.**
+**Cause 2: the L2 pool is missing, exhausted or announced on the wrong interface.**
 
 ```bash
 kubectl get ciliumloadbalancerippool
@@ -411,24 +411,24 @@ vagrant ssh k8s-cp1 -c "free -m ; uptime"
 Causes, in order of frequency on this lab:
 
 1. **fsync latency.** etcd commits every write to disk before acknowledging it. On VirtualBox, a
-   VM disk on a spinning drive — or on an SSD already saturated by the host — pushes fsync past
+   VM disk on a spinning drive (or on an SSD already saturated by the host) pushes fsync past
    etcd's tolerance and leader election starts flapping. Keep the VM disks on an SSD, and do not
    run a 3-control-plane topology next to a heavy build.
 2. **`CP_MEM` too low.** A stacked etcd on 2048 MiB has ~350 MiB of headroom; the first addons eat
    it. `3072` is the real floor, `_k8s/observability/` wants `4096`.
 3. **Clock drift.** etcd is very sensitive to it. The `Vagrantfile` lowers the guest additions'
-   time-sync threshold to 1000 ms, which covers a suspend/resume cycle — but a VM left suspended
+   time-sync threshold to 1000 ms, which covers a suspend/resume cycle, but a VM left suspended
    for a long time is better off `vagrant reload`-ed.
 
 > ⚠️ With 3 control planes etcd tolerates **one** failure. Do not stop two at the same time
-> (during an upgrade included — see [`kubeadm/UPGRADE.md`](kubeadm/UPGRADE.md)): the API freezes
+> (during an upgrade included, see [`kubeadm/UPGRADE.md`](kubeadm/UPGRADE.md)): the API freezes
 > until quorum is back.
 
 ---
 
 ## 🔐 6. Lab UIs over HTTPS
 
-Work down the chain, in order — each step assumes the previous one.
+Work down the chain, in order; each step assumes the previous one.
 
 **1. Does the Gateway have an IP?**
 
@@ -456,7 +456,7 @@ getent hosts argo.kubeadm.lab.example.io
 ```
 
 > ⚠️ **Do not test the Gateway IP with `ping`.** A Service IP announced in L2 by Cilium answers
-> **ARP** and **TCP** but not ICMP — no interface actually carries the address. A failing `ping`
+> **ARP** and **TCP** but not ICMP: no interface actually carries the address. A failing `ping`
 > on `.200` is normal and proves nothing, while `ping` on a *node* works, which makes the false
 > negative convincing. The real proof that the announcement works is the ARP entry resolving to a
 > node's MAC:

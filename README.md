@@ -4,13 +4,13 @@
 
 # 🏠 ☸️ Vagrant-KubeADM
 
-> **Kubernetes 1.36 the hard way — `kubeadm` on Debian 13 VMs, on VirtualBox.** `vagrant up`
+> **Kubernetes 1.36 the hard way: `kubeadm` on Debian 13 VMs, on VirtualBox.** `vagrant up`
 > prepares the machines, one script chains the `kubeadm` commands, and a full application layer
 > (Cilium, Envoy Gateway, Longhorn, Vault, PostgreSQL…) comes on top. Single control plane, or
 > HA with 3 CPs behind a keepalived VIP.
 
 Every VM is an ordinary Debian box with SSH and `apt`, and every step the scripts take is a
-`kubeadm` command you could type yourself — §5 shows exactly which ones. What the repo adds is
+`kubeadm` command you could type yourself; §5 shows exactly which ones. What the repo adds is
 the error-prone part: the VIP that must exist *before* `kubeadm init`, the `node-ip` every
 Vagrant lab gets wrong, the containerd 2.x config, the certificate SANs you cannot add later.
 
@@ -34,10 +34,10 @@ vagrant up                      # creates and PREPARES the VMs (no cluster yet)
 > leaves it **empty** and `./_k8s/platform-up.sh` returns `No such file or directory`. On a clone
 > already made: `git submodule update --init --recursive`.
 
-> ℹ️ **There is a twin lab, [Vagrant-Talos](https://github.com/OPS-NC/Vagrant-Talos)** — same IP
+> ℹ️ **There is a twin lab, [Vagrant-Talos](https://github.com/OPS-NC/Vagrant-Talos)**: same IP
 > plan, same application layer, opposite operating model: Talos is immutable, has no SSH and no
 > package manager, and is driven entirely through an API. Here you get a normal distribution and
-> you drive `kubeadm` yourself: more moving parts, which is what makes the lab worth reading.
+> you drive `kubeadm` yourself: more moving parts, and seeing them work is the point of the lab.
 
 ---
 
@@ -52,7 +52,7 @@ vagrant up                      # creates and PREPARES the VMs (no cluster yet)
 | `helm` | `_k8s/` addons | https://helm.sh/docs/intro/install/ |
 | `uv` *(optional)* | `make docs` | https://docs.astral.sh/uv/ |
 
-That is the whole list — no cluster-specific binary on your machine. `kubeadm`, `kubelet`,
+That is the whole list: no cluster-specific binary on your machine. `kubeadm`, `kubelet`,
 `kubectl` and `containerd` live *inside* the VMs, installed by
 [`kubeadm/provision.sh`](https://github.com/OPS-NC/Vagrant-kubeadm/blob/main/kubeadm/provision.sh)
 during `vagrant up`. The `bento/debian-13` box is downloaded by Vagrant on first use; no plugin
@@ -66,13 +66,13 @@ git submodule update --remote _k8s          # move it to the latest upstream com
 ```
 
 > ⚠️ **`git pull` does not update the submodule.** It moves *this* repo only, leaving `_k8s/` on
-> the commit pinned before — you would run the documented commands against an older application
-> layer. `git status` showing `modified: _k8s (new commits)` just means the checkout no longer
+> the commit pinned before, so you would run the documented commands against an older
+> application layer. `git status` showing `modified: _k8s (new commits)` just means the checkout no longer
 > matches the pin.
 
 > ⚠️ **VirtualBox and KVM cannot share VT-x.** With the KVM module loaded, `vagrant up` dies on
-> `VERR_VMX_IN_VMX_ROOT_MODE`. Unload it first (`sudo modprobe -r kvm_intel kvm`, or `kvm_amd`)
-> — see [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md).
+> `VERR_VMX_IN_VMX_ROOT_MODE`. Unload it first (`sudo modprobe -r kvm_intel kvm`, or `kvm_amd`).
+> See [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md).
 
 > 💡 Keep host `kubectl` within one minor of the cluster (1.35 → 1.37 for a 1.36 cluster), or
 > fall back to the in-VM one: `vagrant ssh k8s-cp1 -c 'kubectl get nodes -o wide'`.
@@ -99,7 +99,7 @@ duplicates.
 Every VM has **2 NICs**: NIC1 = VirtualBox NAT (Internet, `10.0.2.15` on *every* VM) and NIC2 =
 host-only `192.168.56.x` (cluster, API, etcd, pods). The default route goes through the NAT so
 the VMs can reach `apt` and the registries; what must be host-only is the node's *identity*,
-never its default route — see `node-ip` in §8.
+never its default route (see `node-ip` in §8).
 
 > ℹ️ **The host-only interface name is never hard-coded.** Debian 13 usually names it `enp0s8`,
 > some box builds still give `eth1`. `provision.sh` finds the interface carrying the node's IP,
@@ -108,8 +108,8 @@ never its default route — see `node-ip` in §8.
 
 > ℹ️ Name resolution depends on neither DNS nor boot order: the `Vagrantfile` pushes an identical
 > `/etc/hosts` block to every node, and `provision.sh` deletes Debian's `127.0.1.1 <hostname>`
-> line — left in place, the kubelet resolves its own name to loopback and the node registers as
-> unreachable.
+> line. Left in place, it makes the kubelet resolve its own name to loopback, and the node
+> registers as unreachable.
 
 ---
 
@@ -173,7 +173,7 @@ Three constraints worth knowing before you edit:
   stacked etcd as soon as addons pile up. `_k8s/observability/` wants `4096`.
 - **`K8S_VERSION` and `K8S_APT_MINOR` must agree.** `pkgs.k8s.io` repositories are per-minor, and
   a mismatch fails in `apt` with an error that never mentions it. That pair is what you bump for
-  an upgrade — [`kubeadm/UPGRADE.md`](kubeadm/UPGRADE.md).
+  an upgrade; see [`kubeadm/UPGRADE.md`](kubeadm/UPGRADE.md).
 
 ---
 
@@ -202,7 +202,7 @@ and, on control planes, **keepalived carrying the VIP**. Each VM ends ready to r
 | `[5/5]` | untaints per `UNTAINT_CP`, labels the workers, writes `_out/cluster.env` (detected `HOSTONLY_IF` included) |
 
 Before touching anything it validates the config and checks that **all** expected VMs are
-`running` — cheap up front, versus a `vagrant ssh` timing out mid-`join`.
+`running`: cheap up front, versus a `vagrant ssh` timing out mid-`join`.
 
 ```bash
 export KUBECONFIG="$PWD/kubeconfig"
@@ -215,11 +215,11 @@ The kubeconfig needs no editing: its `server:` is the VIP, reachable from the ho
 > pod network exists the kubelet reports `cni plugin not initialized`, CoreDNS stays `Pending`
 > and the nodes stay `NotReady`. The fix is the next command: `./_k8s/platform-up.sh` (§6).
 
-> 💡 **`cluster-up.sh` is idempotent** — `node-init.sh` refuses to re-run `kubeadm init` if
+> 💡 **`cluster-up.sh` is idempotent.** `node-init.sh` refuses to re-run `kubeadm init` if
 > `/etc/kubernetes/admin.conf` exists, `node-join.sh` skips a node that already has
 > `kubelet.conf`. Re-running it is also how you grow the lab (§7.1). Join credentials are
 > regenerated on **every** run, because the bootstrap token expires after 24 h and the
-> certificate key after 2 h — so a run three days later just works.
+> certificate key after 2 h, so a run three days later just works.
 
 For another topology, edit `lab.env`, or override on the spot **for both commands**, since each
 re-reads its own environment:
@@ -253,8 +253,8 @@ than kube-vip (§8.1).
 
 ### 5.2 `kubeadm init` on the first control plane
 
-The repo's way — `cluster-up.sh` already rendered the config into `_out/`, visible from the VM
-through the synced folder:
+The repo's way, with `cluster-up.sh` having already rendered the config into `_out/`, visible
+from the VM through the synced folder:
 
 ```bash
 sudo kubeadm init --config /vagrant/_out/kubeadm-init.yaml --upload-certs \
@@ -280,7 +280,7 @@ apiserver listens on, `--control-plane-endpoint` is the *shared* VIP baked into 
 and into every kubeconfig.
 
 > ⚠️ **The flag form cannot set `node-ip`, which is why the repo uses `--config`.** With flags
-> alone the kubelet picks the default-route NIC — the NAT, `10.0.2.15`, **identical on every
+> alone the kubelet picks the default-route NIC: the NAT, `10.0.2.15`, **identical on every
 > VM**. Every node then registers with the same address: `kubectl get nodes -o wide` looks
 > plausible while logs, `exec`, probes and inter-node traffic go to the wrong place. The setting
 > only exists as `nodeRegistration.kubeletExtraArgs`.
@@ -288,7 +288,7 @@ and into every kubeconfig.
 Two more things that cannot be fixed afterwards: **`--upload-certs`** stores the cluster CAs in
 the `kubeadm-certs` Secret (without it, a second control plane can only join after you copy
 `/etc/kubernetes/pki` by hand), and **certSANs**, which need regenerating the API certificate to
-change — hence the 5 control-plane IPs declared up front, including nodes that do not exist yet.
+change, hence the 5 control-plane IPs declared up front, including nodes that do not exist yet.
 
 ### 5.3 Joining nodes
 
@@ -317,11 +317,11 @@ Four things bite here:
 - **The certificate key expires after 2 hours**, the token after 24. Both are cheap to regenerate;
   a stale one gives a decryption error that never mentions expiry.
 - **`--config` and `--certificate-key` are mutually exclusive.** With a config file the key goes
-  under `controlPlane.certificateKey` — *not* at the document root, unlike `InitConfiguration`.
+  under `controlPlane.certificateKey`, *not* at the document root, unlike `InitConfiguration`.
 - **Join control planes one at a time.** Each join adds an etcd member, and etcd accepts a single
   membership change at a time; two in parallel fail on an unreadable quorum error.
 
-Getting a kubeconfig needs no `scp` — the synced folder is right there, and `server:` already
+Getting a kubeconfig needs no `scp`: the synced folder is right there, and `server:` already
 points at the VIP:
 
 ```bash
@@ -333,7 +333,7 @@ chmod 0600 kubeconfig && export KUBECONFIG="$PWD/kubeconfig"
 
 ## 📦 6. What comes next: the application layer
 
-A bare cluster does nothing useful — here it is not even `Ready`. Cilium, Envoy Gateway,
+A bare cluster does nothing useful; here it is not even `Ready`. Cilium, Envoy Gateway,
 cert-manager, metrics-server, Longhorn, Vault, CloudNativePG, Prometheus/Loki, Kyverno, Trivy,
 MinIO, Argo CD… all come from [k8s-playground](https://github.com/OPS-NC/k8s-playground), mounted
 here as `_k8s/` and shared with the Talos twin. Its documentation is published separately:
@@ -349,24 +349,24 @@ here as `_k8s/` and shared with the Talos twin. Its documentation is published s
 
 Nothing to declare: the **lab** is the directory containing `_k8s/` that carries the
 `Vagrantfile` (so `lab.env`, `_out/` and `kubeconfig` are found there), and the **distribution**
-is read off its contents — a `kubeadm/cluster-up.sh` next to the `Vagrantfile` means the kubeadm
+is read off its contents: a `kubeadm/cluster-up.sh` next to the `Vagrantfile` means the kubeadm
 lab. That works straight from the clone, before any `vagrant up`. An explicit
 `./_k8s/install.sh kubeadm platform`, `--distro=kubeadm` or `K8S_DISTRO` still wins, and
-`LAB_DIR` is the escape hatch for an unusual layout — neither is needed here.
+`LAB_DIR` is the escape hatch for an unusual layout; neither is needed here.
 
 `platform-up.sh` installs the CNI first; the nodes go `Ready` a minute or two later.
 
 > ⚠️ **This layer assumes `CNI=cilium`** (the default). It needs a `LoadBalancer` Service that
-> really gets an IP, which on a host-only network only Cilium's L2/ARP announcement provides —
-> otherwise the Gateway stays at `EXTERNAL-IP <pending>` and no UI is reachable. See §9.
+> really gets an IP, which on a host-only network only Cilium's L2/ARP announcement provides.
+> Otherwise the Gateway stays at `EXTERNAL-IP <pending>` and no UI is reachable. See §9.
 
 ### 6.1 The two manual prerequisites
 
 Nothing in the cluster can do these for you.
 
 **a) Make `*.<LAB_DOMAIN>` resolve to the Gateway IP.** Every lab UI is served through Envoy's
-`LoadBalancer` Service, which takes the first IP of `LB_POOL_START` — `192.168.56.200` by
-default. With `SELF_SIGNED=true` an `/etc/hosts` line is enough and no public record is needed:
+`LoadBalancer` Service, which takes the first IP of `LB_POOL_START` (`192.168.56.200` by
+default). With `SELF_SIGNED=true` an `/etc/hosts` line is enough and no public record is needed:
 
 ```bash
 kubectl -n envoy-gateway-system get svc -o wide | grep LoadBalancer   # the actual IP
@@ -378,7 +378,7 @@ With `SELF_SIGNED=false` you need a real wildcard `A` record `*.<LAB_DOMAIN>` �
 **DNS-only** (a CDN proxy cannot reach a private `192.168.56.x` origin).
 
 **b) Choose the TLS mode** with `SELF_SIGNED`. `true`: `platform-up.sh` builds a local CA and a
-wildcard with `openssl` — no cert-manager, no token, no public domain, and a browser warning
+wildcard with `openssl`: no cert-manager, no token, no public domain, and a browser warning
 until you import `_out/self-signed/ca.crt`. `false`: cert-manager + Let's Encrypt over ACME
 DNS-01, which needs a real domain, `CLOUDFLARE_API_TOKEN`, and respect for the **5 certificates
 per week** production quota (`LAB_ACME_ISSUER=staging` is the default for that reason). Both
@@ -415,7 +415,7 @@ git submodule update --remote _k8s        # or: jump to the latest k8s-playgroun
 
 No certificate regeneration: the `certSANs` already cover 5 control-plane IPs (§5.2).
 
-Removing a worker — drain first, so the cluster stops scheduling onto a machine about to vanish:
+Removing a worker means draining first, so the cluster stops scheduling onto a machine about to vanish:
 
 ```bash
 kubectl drain k8s-w3 --ignore-daemonsets --delete-emptydir-data
@@ -433,7 +433,7 @@ then lower `WORKERS` in `lab.env`.
 
 It runs `kubeadm reset` on every node (**workers first**, so they deregister while the API still
 answers), then removes `_out/` and `kubeconfig`. The VMs keep their packages, containerd and
-keepalived, so a rebuild is `./kubeadm/cluster-up.sh` alone — minutes instead of a full
+keepalived, so a rebuild is `./kubeadm/cluster-up.sh` alone: minutes instead of a full
 `vagrant up`. Prefer it to `vagrant destroy` to replay a failed bootstrap, or to change
 `POD_CIDR`, `SERVICE_CIDR`, the CNI or the VIP: all four are frozen at `kubeadm init`.
 
@@ -441,7 +441,7 @@ keepalived, so a rebuild is `./kubeadm/cluster-up.sh` alone — minutes instead 
 > node disks included.
 
 > ℹ️ **Why a dedicated reset.** `kubeadm reset` deliberately leaves behind what it did not
-> create — CNI interfaces, Cilium's **pinned eBPF programs under `/sys/fs/bpf`** (which survive
+> create: CNI interfaces, Cilium's **pinned eBPF programs under `/sys/fs/bpf`** (which survive
 > the DaemonSet and keep intercepting traffic for a cluster that no longer exists), and
 > kube-proxy's iptables rules. `node-reset.sh` cleans all of it; without that pass the next
 > `init` inherits a ghost datapath and the pod network misbehaves with nothing in any log.
@@ -457,7 +457,7 @@ The most structural decision in the repo. `controlPlaneEndpoint` points at the V
 exist *before* the init.
 
 kube-vip, the usual answer in kubeadm HA guides, runs as a static pod and elects its leader
-**through the Kubernetes API** — that is, through the very VIP it is supposed to carry. The
+**through the Kubernetes API**, that is, through the very VIP it is supposed to carry. The
 documented way out is `--k8sConfigPath /etc/kubernetes/super-admin.conf`, itself fragile since
 Kubernetes 1.29 moved `admin.conf` out of `system:masters`
 ([kube-vip#684](https://github.com/kube-vip/kube-vip/issues/684), still open).
@@ -466,15 +466,15 @@ keepalived has none of that: a plain VRRP daemon, knows nothing about Kubernetes
 up at VM boot. `provision.sh` configures it with **unicast VRRP** (multicast is the first thing to
 misbehave on a VirtualBox host-only switch, and every control-plane IP is known anyway),
 priorities cp1 = 100 / cp2 = 90 / cp3 = 80, and a `vrrp_script` polling
-`https://127.0.0.1:6443/livez/ping` every 3 s with `weight -30` — so a CP whose apiserver is dead
+`https://127.0.0.1:6443/livez/ping` every 3 s with `weight -30`, so a CP whose apiserver is dead
 drops to 70 and a healthy cp2 at 90 takes over. `/livez/ping` is readable anonymously via the
 `system:public-info-viewer` binding kubeadm creates, so no credential has to reach a health
 script. There is no `authentication` block: VRRPv2 sends its password in clear text and buys
-nothing here, the trust boundary being the host-only network — `VRRP_ROUTER_ID` is the knob to
+nothing here, the trust boundary being the host-only network. `VRRP_ROUTER_ID` is the knob to
 coexist with another keepalived lab.
 
 While no cluster exists the check fails on every CP: they all lose 30 points, the relative order
-holds, and the VIP is carried anyway — which is what `kubeadm init` needs. kube-vip remains a
+holds, and the VIP is carried anyway, which is what `kubeadm init` needs. kube-vip remains a
 good option *once the cluster runs* (`--services` mode); it is the bootstrap role that fails here.
 
 The VIP is used **even with a single control plane**, for the same reason: pointing
@@ -492,7 +492,7 @@ upgrades.
 
 `SystemdCgroup = true` matters more than the kubelet's `cgroupDriver` field: Debian 13 is
 cgroup v2 with systemd as the manager, and leaving containerd on `cgroupfs` puts two managers on
-one hierarchy — nodes then get unstable under load.
+one hierarchy, and nodes then get unstable under load.
 
 > ⚠️ **The 1.7 → 2.x trap**: the `pause` image key changed *name and location*. Config v2 has
 > `sandbox_image` under `[plugins."io.containerd.grpc.v1.cri"]`; config v3 has `sandbox` under
@@ -524,22 +524,22 @@ the shape.
 - **Control-plane metrics**: `bind-address: 0.0.0.0` on `controllerManager` and `scheduler`, which
   otherwise listen on loopback and give Prometheus two DOWN targets with no explanation.
 - **Pre-pulled images**, during `vagrant up` and in parallel across VMs, so `kubeadm init`
-  downloads nothing — the biggest source of bootstrap timeouts. Workers pull only `pause` and
+  downloads nothing, the biggest source of bootstrap timeouts. Workers pull only `pause` and
   `kube-proxy`, saving ~500 MiB each.
 - **Swap** off and masked, systemd swap units included (`/etc/fstab` does not describe those).
 
 The `/vagrant` synced folder is a **mechanism**, not a convenience: `cluster-up.sh` renders configs
 on the host and the VMs read them at `/vagrant/_out/`, so nothing needs `scp` and no secret is
 passed on a command line where it would land in shell history. `_out/join.env` does hold the
-bootstrap token and the certificate key, readable from every VM — fine for a lab, not a pattern for
+bootstrap token and the certificate key, readable from every VM: fine for a lab, not a pattern for
 production.
 
 ---
 
 ## 🌐 9. CNI: Cilium, Calico or Flannel
 
-**kubeadm installs no CNI, ever.** Unlike the Talos twin — where flannel can be laid down by the
-OS at bootstrap — the pod network here is *always* installed afterwards by
+**kubeadm installs no CNI, ever.** Unlike the Talos twin (where flannel can be laid down by the
+OS at bootstrap), the pod network here is *always* installed afterwards by
 `./_k8s/platform-up.sh`. `CNI` is read by `cluster-up.sh` (for the kube-proxy decision and
 `_out/cluster.env`) and by the platform step (which chart to install).
 
@@ -558,7 +558,7 @@ a deliberately bare cluster.
 
 > ⚠️ **`KUBE_PROXY_REPLACEMENT=true` requires `CNI=cilium`**, and `cluster-up.sh` refuses any
 > other combination. With `--skip-phases=addon/kube-proxy` and no replacement, **no ClusterIP
-> answers at all** — not even CoreDNS reaching the API. The error message offers the two ways
+> answers at all**, not even CoreDNS reaching the API. The error message offers the two ways
 > out: `CNI=cilium`, or `KUBE_PROXY_REPLACEMENT=false`.
 
 > ℹ️ Cilium needs `k8sServiceHost`/`k8sServicePort` when kube-proxy is gone: nothing provisions
@@ -599,24 +599,24 @@ discover it ten minutes into a `vagrant up`. On CI, where `kubeadm` is installed
 check always runs.
 
 The `ci` workflow calls these same `make` targets on every pull request, so a check cannot pass
-in CI and fail on your machine. It also asserts the guard rails actually fire —
+in CI and fail on your machine. It also asserts the guard rails actually fire:
 `CONTROL_PLANES=2 vagrant validate` **must** be rejected. Nothing in the `Makefile` touches a
 running cluster or regenerates secrets: `make validate` is safe on a lab that is up.
 
 > ℹ️ `validate-shell` and `validate-yaml` only cover files tracked by **this** repo. The `_k8s/`
-> submodule is one pointer, so none of its scripts are checked here — they are validated in
+> submodule is one pointer, so none of its scripts are checked here; they are validated in
 > k8s-playground's own CI.
 
 ---
 
 ## 📄 11. License
 
-**Apache License 2.0** — see
+**Apache License 2.0**. See
 [`LICENSE`](https://github.com/OPS-NC/Vagrant-kubeadm/blob/main/LICENSE). Use it, modify it,
 redistribute it, including commercially, as long as you keep the copyright notice and state your
 changes. **No warranty**: this is a lab, do not run it in production.
 
-It covers what this repo contains — the `Vagrantfile`, the `kubeadm/` scripts, the templates, the
+It covers what this repo contains: the `Vagrantfile`, the `kubeadm/` scripts, the templates, the
 manifests, the docs. It does not extend to the third-party components those scripts download
 (Kubernetes, containerd, keepalived, Cilium, Envoy Gateway, Longhorn, Vault…), nor to the `_k8s/`
 submodule: [k8s-playground](https://github.com/OPS-NC/k8s-playground) carries its own `LICENSE`.
