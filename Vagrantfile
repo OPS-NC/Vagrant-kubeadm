@@ -43,8 +43,8 @@ end
 # These defaults MUST stay aligned with lab.env.example: without a lab.env, the
 # Vagrantfile and cluster-up.sh each fall back to their own, and two diverging values
 # give an incoherent cluster (1.36 packages, configuration generated for 1.35).
-K8S_VERSION       = ENV["K8S_VERSION"]       || "1.36.3"
-K8S_APT_MINOR     = ENV["K8S_APT_MINOR"]     || "v1.36"
+K8S_VERSION       = ENV["K8S_VERSION"]       || "1.37.0"
+K8S_APT_MINOR     = ENV["K8S_APT_MINOR"]     || "v1.37"
 CONTAINERD_SOURCE = ENV["CONTAINERD_SOURCE"] || "docker"
 REGISTRY_MIRROR   = ENV["REGISTRY_MIRROR"]   || ""
 SYSTEM_UPGRADE    = ENV["SYSTEM_UPGRADE"]    || "true"

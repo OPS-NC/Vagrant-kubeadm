@@ -8,13 +8,14 @@
 > vrai cluster. Parcours d'installation : [`../LISEZ-MOI.md`](../LISEZ-MOI.md) · symptômes :
 > [`../DEPANNAGE.md`](../DEPANNAGE.md).
 
-Référence au moment de l'écriture : Kubernetes **1.36.3**, dépôt apt **`v1.36`**, containerd
+Référence au moment de l'écriture : Kubernetes **1.37.0**, dépôt apt **`v1.37`**, containerd
 **2.2.6**, Cilium **1.20.0**, `CNI=cilium`. Adapte les noms de nodes et les IP à ta topologie
 (`lab.env`) ; le défaut du dépôt est 1 control plane + 2 workers.
 
-> ⚠️ Contrairement au lab Talos jumeau, cette procédure n'a **pas** été chronométrée sur une
-> exécution réelle. C'est la procédure kubeadm amont transposée aux variables et aux scripts de ce
-> dépôt ; chaque commande est citée de la documentation liée au §6.
+> ℹ️ Chronométrée sur une exécution réelle, le 2026-09-21, `1.36.3 → 1.37.0` sur un lab
+> 1 CP + 3 W : **~12 min** de bout en bout, dont ~4 pour le seul `kubeadm upgrade apply`
+> (etcd 3.6.8 → 3.7.0, CoreDNS v1.14.2 → v1.14.6). L'API a été injoignable ~1 min pendant que
+> les pods statiques roulaient.
 
 ---
 
@@ -74,10 +75,10 @@ K8S_VERSION=1.37.0
 K8S_APT_MINOR=v1.37
 ```
 
-> ⚠️ Les deux ont aussi des **défauts de repli dupliqués** dans le `Vagrantfile` et dans
-> `kubeadm/cluster-up.sh` (`K8S_VERSION` seulement là), pour qu'un lab sans `lab.env` fonctionne
-> quand même. Incrémente-les dans le même commit que `lab.env.example`, sinon un lab construit sans
-> `lab.env` repart sur l'ancienne version.
+> ⚠️ Les deux ont aussi des **défauts de repli dupliqués** dans le `Vagrantfile`, dans
+> `kubeadm/provision.sh` (les deux clés) et dans `kubeadm/cluster-up.sh` (`K8S_VERSION` seulement
+> là), pour qu'un lab sans `lab.env` fonctionne quand même. Incrémente-les dans le même commit que
+> `lab.env.example`, sinon un lab construit sans `lab.env` repart sur l'ancienne version.
 
 ---
 
@@ -112,10 +113,17 @@ toujours `-1.1`.
 ```bash
 export KUBECONFIG="$PWD/kubeconfig"
 kubectl get nodes -o wide                 # tous les nodes Ready, tous sur la même version
-kubectl get pods -A | grep -v Running     # rien de cassé avant de commencer
+kubectl get pods -A | grep -v Running     # rien de cassé avant de commencer (cf. ci-dessous)
 kubectl get --raw='/healthz/etcd'
 vagrant ssh k8s-cp1 -c "sudo kubeadm certs check-expiration"
 ```
+
+> ⚠️ **`grep -v Running` masque un pod `Running` mais pas Ready** — le cas `1/2`. C'est la
+> différence entre « le cluster est propre » et « un composant est à terre depuis une heure ». Le
+> contrôle qui ne ment pas :
+> ```bash
+> kubectl get pods -A --no-headers | awk '{split($3,r,"/")} $4!="Completed" && r[1]!=r[2]'
+> ```
 
 Lis le [changelog](https://git.k8s.io/kubernetes/CHANGELOG) de la version cible, puis vérifie deux
 contraintes propres à ce lab :
@@ -160,6 +168,18 @@ kubectl uncordon <node>
 > coince sur un PodDisruptionBudget (Longhorn est le suspect habituel), corrige le PDB plutôt que
 > de forcer ; `--disable-eviction` est l'instrument brutal de dernier recours.
 
+> ⚠️ **Sur un lab qui porte Longhorn, la vidange bloque sur chaque worker** — par construction, pas
+> par accident. Longhorn dote chaque pod `instance-manager` d'un PDB qui reste à **0 disruption
+> autorisée**, et les addons mono-instance ajoutent les leurs (`vault`, `keycloak-db-primary`).
+> Regarde avant de vidanger :
+> ```bash
+> kubectl get pdb -A        # ALLOWED DISRUPTIONS = 0 : l'API d'éviction refusera
+> ```
+> Une montée du **paquet** kubelet n'a pas besoin de l'éviction : le node reste debout et
+> containerd garde les conteneurs en vie au travers du `systemctl restart kubelet`. Un
+> `kubectl cordon <node>` seul suffit donc, et c'est ce qu'a fait l'exécution du 2026-09-21 —
+> forcer la vidange aurait détaché des volumes Longhorn mono-réplica pour rien.
+
 Ce qui change entre les rôles de nodes, c'est seulement l'étape du milieu.
 
 ### 4.3 Premier control plane (`k8s-cp1`) — `upgrade apply`
@@ -170,6 +190,16 @@ Entre les deux blocs du §4.2 :
 sudo kubeadm upgrade plan          # ce qui se passerait
 sudo kubeadm upgrade apply v1.37.x # l'étape qui monte le control plane
 ```
+
+> ⚠️ **Avec `KUBE_PROXY_REPLACEMENT=true`, ajoute `--skip-phases=addon/kube-proxy`.**
+> `upgrade plan` liste `kube-proxy` parmi les composants à monter **même sur un cluster qui n'en a
+> pas**, et `upgrade apply` recréerait le DaemonSet — en conflit direct avec le remplacement eBPF
+> de Cilium. C'est le jumeau, au moment de la montée, du `--skip-phases=addon/kube-proxy` que
+> `cluster-up.sh` passe déjà à `kubeadm init`.
+> ```bash
+> sudo kubeadm upgrade apply v1.37.x -y --skip-phases=addon/kube-proxy
+> kubectl -n kube-system get ds kube-proxy    # doit rester NotFound
+> ```
 
 `upgrade apply` réécrit les manifestes de pods statiques de `kube-apiserver`,
 `kube-controller-manager`, `kube-scheduler` et `etcd`, et **renouvelle les certificats qu'il gère
@@ -223,10 +253,15 @@ t'es arrêté :
 | `lab.env.example` | les deux mêmes lignes (le modèle versionné) |
 | `Vagrantfile` | les défauts de repli `K8S_VERSION` / `K8S_APT_MINOR` |
 | `kubeadm/cluster-up.sh` | le défaut de repli `K8S_VERSION` |
+| `kubeadm/provision.sh` | les défauts de repli `K8S_VERSION` / `K8S_APT_MINOR` |
 
-Trois de ces quatre fichiers portent un défaut **dupliqué** à dessein — un filet de sécurité quand
+Quatre de ces cinq fichiers portent un défaut **dupliqué** à dessein — un filet de sécurité quand
 `lab.env` manque. Deux défauts qui divergent donnent un lab incohérent : des paquets d'un minor,
-une configuration générée pour un autre. `make validate-defaults` vérifie cette paire, clé par clé.
+une configuration générée pour un autre.
+
+> ⚠️ **`make validate-defaults` ne couvre pas `kubeadm/provision.sh`.** Il ne compare que
+> `lab.env.example`, le `Vagrantfile` et `kubeadm/cluster-up.sh`. Oublie ce quatrième fichier et un
+> lab reconstruit installe en silence l'**ancien** minor, sans que rien ne te prévienne.
 
 ---
 
@@ -307,6 +342,20 @@ donne son IP au Gateway Envoy.
 kubectl -n kube-system exec ds/cilium -- cilium-dbg status --verbose
 kubectl -n envoy-gateway-system get svc      # le Gateway doit garder son EXTERNAL-IP
 ```
+
+> ⚠️ **Cilium est en retard sur un minor Kubernetes neuf, et ce lab n'a aucun repli.** Cilium
+> valide une liste bornée de versions de Kubernetes ; à la sortie de la 1.37.0, **aucune** version
+> de Cilium ne la listait (la 1.20.2 s'arrêtait à 1.36, la 1.21 n'était qu'en pré-release). Ça
+> fonctionne grâce à la rétro-compatibilité de Kubernetes, mais rien n'est testé e2e — vérifie donc
+> le datapath à la main plutôt que de te fier à un statut vert, et monte Cilium dès qu'une version
+> qui valide la cible existe :
+> ```bash
+> kubectl -n kube-system exec ds/cilium -c cilium-agent -- \
+>   cilium-dbg status | grep -E 'KubeProxyReplacement|Cluster health'
+> kubectl run netcheck --rm -i --image=nicolaka/netshoot --restart=Never -- sh -c \
+>   'dig +short @10.96.0.10 kubernetes.default.svc.cluster.local; \
+>    curl -sk -o /dev/null -w "apiserver ClusterIP %{http_code}\n" https://10.96.0.1/healthz'
+> ```
 
 Tout le reste dans les VM (keepalived compris) suit un simple `apt upgrade`, ce qui est sans risque
 précisément parce que `kubelet`/`kubeadm`/`kubectl` sont gelés.
