@@ -8,13 +8,13 @@
 > real cluster. Install path: [`../README.md`](../README.md) · symptoms:
 > [`../TROUBLESHOOTING.md`](../TROUBLESHOOTING.md).
 
-Reference at the time of writing: Kubernetes **1.36.3**, apt repository **`v1.36`**, containerd
+Reference at the time of writing: Kubernetes **1.37.0**, apt repository **`v1.37`**, containerd
 **2.2.6**, Cilium **1.20.0**, `CNI=cilium`. Adapt node names and IPs to your topology
 (`lab.env`); the repo default is 1 control plane + 2 workers.
 
-> ⚠️ Unlike the Talos sibling lab, this procedure has **not** been timed on a live run. It is the
-> upstream kubeadm procedure transposed to this repo's variables and scripts; every command is
-> quoted from the documentation linked in §6.
+> ℹ️ Timed on a live run, 2026-09-21, `1.36.3 → 1.37.0` on a 1 CP + 3 W lab: **~12 min** end to
+> end, of which `kubeadm upgrade apply` alone took ~4 (etcd 3.6.8 → 3.7.0, CoreDNS v1.14.2 →
+> v1.14.6). The API was unreachable for ~1 min while the static pods rolled.
 
 ---
 
@@ -71,10 +71,10 @@ K8S_VERSION=1.37.0
 K8S_APT_MINOR=v1.37
 ```
 
-> ⚠️ Both also have **fallback defaults duplicated** in the `Vagrantfile` and in
-> `kubeadm/cluster-up.sh` (`K8S_VERSION` only there), so that a lab without a `lab.env` still
-> works. Bump them in the same commit as `lab.env.example`, or a lab built without `lab.env`
-> restarts on the old version.
+> ⚠️ Both also have **fallback defaults duplicated** in the `Vagrantfile`, in
+> `kubeadm/provision.sh` (both keys) and in `kubeadm/cluster-up.sh` (`K8S_VERSION` only there),
+> so that a lab without a `lab.env` still works. Bump them in the same commit as
+> `lab.env.example`, or a lab built without `lab.env` restarts on the old version.
 
 ---
 
@@ -108,10 +108,17 @@ is not always `-1.1`.
 ```bash
 export KUBECONFIG="$PWD/kubeconfig"
 kubectl get nodes -o wide                 # every node Ready, all on the same version
-kubectl get pods -A | grep -v Running     # nothing broken before you start
+kubectl get pods -A | grep -v Running     # nothing broken before you start (see below)
 kubectl get --raw='/healthz/etcd'
 vagrant ssh k8s-cp1 -c "sudo kubeadm certs check-expiration"
 ```
+
+> ⚠️ **`grep -v Running` hides a pod that is `Running` but not Ready** — the `1/2` case. It is the
+> difference between "the cluster is clean" and "a component has been down for an hour". The check
+> that does not lie:
+> ```bash
+> kubectl get pods -A --no-headers | awk '{split($3,r,"/")} $4!="Completed" && r[1]!=r[2]'
+> ```
 
 Read the target release's [changelog](https://git.k8s.io/kubernetes/CHANGELOG), then check two
 lab-specific constraints:
@@ -156,6 +163,18 @@ kubectl uncordon <node>
 > a PodDisruptionBudget (Longhorn is the usual suspect), fix the PDB rather than forcing;
 > `--disable-eviction` is the blunt instrument of last resort.
 
+> ⚠️ **On a lab carrying Longhorn, the drain blocks on every worker** — by construction, not by
+> accident. Longhorn gives each `instance-manager` pod a PDB that sits at **0 allowed
+> disruptions**, and single-instance addons add their own (`vault`, `keycloak-db-primary`). Look
+> before you drain:
+> ```bash
+> kubectl get pdb -A        # ALLOWED DISRUPTIONS = 0 means the eviction API will refuse
+> ```
+> A kubelet **package** upgrade does not need the eviction: the node stays up and containerd keeps
+> the containers running across `systemctl restart kubelet`. So `kubectl cordon <node>` alone is
+> enough, and that is what the 2026-09-21 run used — forcing the drain would have detached
+> single-replica Longhorn volumes for no gain.
+
 What changes between node roles is only the middle step.
 
 ### 4.3 First control plane (`k8s-cp1`) — `upgrade apply`
@@ -166,6 +185,16 @@ Between the two blocks of §4.2:
 sudo kubeadm upgrade plan          # what would happen
 sudo kubeadm upgrade apply v1.37.x # the step that upgrades the control plane
 ```
+
+> ⚠️ **With `KUBE_PROXY_REPLACEMENT=true`, add `--skip-phases=addon/kube-proxy`.** `upgrade plan`
+> lists `kube-proxy` among the components to upgrade **even on a cluster that has none**, and
+> `upgrade apply` would recreate the DaemonSet — in direct conflict with Cilium's eBPF
+> replacement. This is the upgrade-time twin of the `--skip-phases=addon/kube-proxy` that
+> `cluster-up.sh` already passes to `kubeadm init`.
+> ```bash
+> sudo kubeadm upgrade apply v1.37.x -y --skip-phases=addon/kube-proxy
+> kubectl -n kube-system get ds kube-proxy    # must stay NotFound
+> ```
 
 `upgrade apply` rewrites the static pod manifests for `kube-apiserver`,
 `kube-controller-manager`, `kube-scheduler` and `etcd`, and **renews the certificates it manages on
@@ -217,10 +246,15 @@ Then write the new version back into the repo, so a future rebuild starts where 
 | `lab.env.example` | the same two lines (the versioned template) |
 | `Vagrantfile` | the `K8S_VERSION` / `K8S_APT_MINOR` fallback defaults |
 | `kubeadm/cluster-up.sh` | the `K8S_VERSION` fallback default |
+| `kubeadm/provision.sh` | the `K8S_VERSION` / `K8S_APT_MINOR` fallback defaults |
 
-Three of those four carry a **duplicated** default on purpose — a safety net when `lab.env` is
+Four of those five carry a **duplicated** default on purpose — a safety net when `lab.env` is
 missing. Two defaults that diverge give an incoherent lab: packages from one minor, generated
-configuration for another. `make validate-defaults` checks that pair, key by key.
+configuration for another.
+
+> ⚠️ **`make validate-defaults` does not cover `kubeadm/provision.sh`.** It compares
+> `lab.env.example`, the `Vagrantfile` and `kubeadm/cluster-up.sh` only. Forget that fourth file
+> and a rebuilt lab silently installs the **old** minor, with nothing to warn you.
 
 ---
 
@@ -298,6 +332,19 @@ fall back to) and the L2 announcement that gives the Envoy Gateway its IP.
 kubectl -n kube-system exec ds/cilium -- cilium-dbg status --verbose
 kubectl -n envoy-gateway-system get svc      # the Gateway must keep its EXTERNAL-IP
 ```
+
+> ⚠️ **Cilium lags a fresh Kubernetes minor, and this lab has no fallback.** Cilium validates a
+> bounded list of Kubernetes versions; when 1.37.0 shipped, **no** Cilium release listed it
+> (1.20.2 stopped at 1.36, 1.21 was still pre-release). It works through Kubernetes' backward
+> compatibility, but nothing is e2e tested — so verify the datapath by hand instead of trusting
+> a green status, and bump Cilium once a validating release exists:
+> ```bash
+> kubectl -n kube-system exec ds/cilium -c cilium-agent -- \
+>   cilium-dbg status | grep -E 'KubeProxyReplacement|Cluster health'
+> kubectl run netcheck --rm -i --image=nicolaka/netshoot --restart=Never -- sh -c \
+>   'dig +short @10.96.0.10 kubernetes.default.svc.cluster.local; \
+>    curl -sk -o /dev/null -w "apiserver ClusterIP %{http_code}\n" https://10.96.0.1/healthz'
+> ```
 
 Everything else in the VMs (keepalived included) follows a plain `apt upgrade`, which is safe
 precisely because `kubelet`/`kubeadm`/`kubectl` are held.

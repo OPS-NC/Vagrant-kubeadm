@@ -210,7 +210,14 @@ resolve. Run it after renaming any heading.
 - **`certSANs` pre-declares five control-plane IPs**, including nodes that do not exist yet.
   A forgotten SAN can only be added by regenerating the certificates. Do not trim that list.
 - **`--skip-phases=addon/kube-proxy` is preferred to v1beta4's declarative `proxy.disabled`** —
-  identical result, but the flag is proven across versions and is what Cilium documents.
+  identical result, but the flag is proven across versions and is what Cilium documents. **The
+  same flag is required on `kubeadm upgrade apply`**: `upgrade plan` lists `kube-proxy` even on a
+  cluster that has none, and the apply would recreate the DaemonSet against Cilium's eBPF
+  replacement. See [`kubeadm/UPGRADE.md`](kubeadm/UPGRADE.md) §4.3.
+- **A `kubectl drain` cannot complete on a worker of a Longhorn-bearing lab.** Longhorn pins each
+  `instance-manager` PDB at 0 allowed disruptions, and `vault` / `keycloak-db-primary` add theirs.
+  A kubelet package upgrade does not need the eviction — `cordon` alone is the right tool, since
+  containerd keeps the containers running across a kubelet restart.
 - **`KUBE_PROXY_REPLACEMENT=true` requires `CNI=cilium`,** and `cluster-up.sh` refuses any other
   combination. Without kube-proxy and without a replacement, no ClusterIP answers at all — not
   even CoreDNS reaching the API. Keep the refusal; do not downgrade it to a warning.
